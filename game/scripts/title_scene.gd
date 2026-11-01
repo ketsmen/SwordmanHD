@@ -20,7 +20,7 @@ var selection := 0
 var _busy := false
 var _menu_shown := false
 var _shown_at := 0.0
-var _clock := 0.0       # 游戏时间 (按帧累加 delta): 「菜单出现 1 秒内忽略新章初始」按它算, 不用墙钟, 固定帧率的自动测试 (跑得比真实时间快) 才能复现
+var _clock := 0.0       # 真实时间 (按帧累加 delta 并还原游戏速度倍数): 「菜单出现 1 秒内忽略新章初始」是防误触, 人手节拍不随游戏加速缩短; 不用墙钟, 固定帧率的自动测试 (跑得比真实时间快) 才能复现
 var _bg: AnimPlayer
 var _menu: Node2D
 var _texts: Array[UiText] = []
@@ -51,7 +51,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	_clock += delta
+	_clock += GameSpeed.real_delta(delta)
 
 
 ## 右下角的版本号 (玩家报 bug 时对得上哪一版): 屏幕坐标的小字, 半透明, 不挡点按; 画在黑幕 (layer 100) 之下

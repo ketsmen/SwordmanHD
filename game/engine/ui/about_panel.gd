@@ -72,7 +72,7 @@ func _label(t: String, size: int, color: Color) -> Label:
 
 
 func _process(delta: float) -> void:
-	_age += delta
+	_age += GameSpeed.real_delta(delta)   # 防误触窗口是人手节拍: 真实时间, 不随游戏速度缩短
 
 
 ## 地址那一行在屏幕上的矩形 (点按判断用); 还没排版时为空矩形

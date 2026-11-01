@@ -9,11 +9,11 @@
  ],
  "scale": 4,
  "stats": {
-  "elements": 262,
-  "verified": 199,
-  "screenshot": 12,
+  "elements": 261,
+  "verified": 200,
+  "screenshot": 10,
   "unknown": 51,
-  "migrated": 246
+  "migrated": 245
  },
  "fonts": {
   "body": {
@@ -2472,29 +2472,21 @@
    "code": "engine/battle/battle_closeup.gd strike",
    "migrated": true
   },
-  "closeup.flash.white": {
+  "closeup.flash.steps": {
    "type": "param",
-   "color": [
-    1,
-    1,
-    1,
-    0.5
+   "add16": [
+    12,
+    12,
+    8,
+    8,
+    6,
+    6,
+    4,
+    4
    ],
-   "status": "screenshot",
-   "code": "engine/battle/battle_closeup.gd _flash",
-   "sec": 0.05,
-   "migrated": true
-  },
-  "closeup.flash.red": {
-   "type": "param",
-   "color": [
-    1,
-    0,
-    0,
-    0.6
-   ],
-   "status": "screenshot",
-   "code": "engine/battle/battle_closeup.gd _flash_red",
+   "tick": 0.04,
+   "status": "verified",
+   "code": "engine/battle/battle_closeup.gd _color_flash",
    "migrated": true
   },
   "closeup.panel.left": {

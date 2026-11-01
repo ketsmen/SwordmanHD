@@ -253,7 +253,7 @@ func move_selected(to: Vector2i) -> void:
 	view.hide_info()
 	_path = rules.commit_move(sel, to)
 	if not _path.is_empty():
-		sel.walk(_path, BattleStage.WALK_SPEED)
+		sel.walk(_path, BattleStage.UNIT_WALK_SPEED)
 		await sel.move_finished
 	busy = false
 	push(ActionMenuState.new())

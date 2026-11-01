@@ -277,8 +277,9 @@ func _process(delta: float) -> void:
 		_pad.queue_redraw()
 	if not visible or not shown:
 		return
-	_idle += delta
-	if _idle >= IDLE_SEC and _idle - delta < IDLE_SEC:
+	var real_dt := GameSpeed.real_delta(delta)   # 无操作变淡: 真实时间
+	_idle += real_dt
+	if _idle >= IDLE_SEC and _idle - real_dt < IDLE_SEC:
 		_set_alpha(IDLE_ALPHA, true)
 
 

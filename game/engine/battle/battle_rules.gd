@@ -174,8 +174,8 @@ static func strike_kinds(r: Dictionary) -> Array:
 			return [{"kind": "miss", "damage": 0}]
 		Attack.Result.GUARD:
 			if r["double"]:
-				return [{"kind": "guard", "damage": r.damage / 2}, {"kind": "guard", "damage": r.damage - r.damage / 2}]
-			return [{"kind": "guard", "damage": r.damage}]
+				return [{"kind": "guard", "damage": r.damage / 2, "crit": r.crit}, {"kind": "guard", "damage": r.damage - r.damage / 2, "crit": r.crit}]
+			return [{"kind": "guard", "damage": r.damage, "crit": r.crit}]
 	var kind := "critical" if r.crit else ("double" if r["double"] else "hit")
 	if r["double"]:
 		return [{"kind": kind, "damage": r.damage / 2}, {"kind": kind, "damage": r.damage - r.damage / 2}]

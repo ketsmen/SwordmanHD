@@ -22,6 +22,10 @@ var frame := 0
 var _press := {}
 var _shots := {}
 var _clicks := {}
+var _ulog_path := ""      # --unit-log=<路径>: 逐帧记战场单位状态变化 (动画对照用, 见 docs/动画对照方案.md)
+var _ulog: FileAccess
+var _ulast := {}
+var _gt := 0.0         # 游戏时间 (秒, 累加 delta x time_scale): 日志用它, 帧号在慢机器上不等于 tick
 var _quit := -1
 var _release: Array = []
 var _holds := {}      # 帧 -> [[动作, 帧数]]
@@ -80,9 +84,11 @@ func _ready() -> void:
 				_mouse.get_or_add(int(v[0]), []).append([kv[0].trim_prefix("--"), Vector2(float(xy[0]), float(xy[1]))])
 			"--quit": _quit = int(kv[1])
 			"--perf-log": _perf_path = kv[1]
+			"--unit-log": _ulog_path = kv[1]
 
 
 func _process(_d: float) -> void:
+	_gt += _d * Engine.time_scale
 	for a in _release:
 		_send(a, false)
 	_release.clear()
@@ -90,6 +96,8 @@ func _process(_d: float) -> void:
 		var img := get_viewport().get_texture().get_image()
 		img.save_png(_shots[frame])
 		print("截图 帧%d -> %s" % [frame, _shots[frame]])
+	if _ulog_path != "":
+		_log_units()
 	for l in _dumps.get(frame, []):
 		UiProbe.dump(l, frame)
 	for a in _press.get(frame, []):
@@ -208,6 +216,25 @@ func _input(e: InputEvent) -> void:
 	else:
 		return
 	_rec.flush()
+
+
+## 动画对照用: 当前场景有 units (战场) 时, 每帧把状态变了的单位记一行 {"f": 帧, "u": 单位号, "s": [格x, 格y, 像素x, 像素y, 动作, 方向, 动画起始帧, 当前帧, 可见, 阶段]}
+## "t" = 游戏时间 (秒); 帧号 f 在渲染慢的机器上不等于 tick, 对照一律用 t
+func _log_units() -> void:
+	var cur = Game.current
+	if cur == null or not ("units" in cur):
+		return
+	if _ulog == null:
+		_ulog = FileAccess.open(_ulog_path, FileAccess.WRITE)
+	for u in cur.units:
+		if not is_instance_valid(u) or u.anim == null:
+			continue
+		var st := [u.cx, u.cy, snappedf(u.position.x, 0.01), snappedf(u.position.y, 0.01), u.act, u.dir, u.anim.start_frame, u.anim.frame, u.visible, int(u._phase)]
+		var i := int(u.index)
+		if _ulast.get(i) != st:
+			_ulast[i] = st
+			_ulog.store_line(JSON.stringify({"f": frame, "t": snappedf(_gt, 0.0001), "u": i, "s": st}))
+	_ulog.flush()
 
 
 func _send(action: String, pressed: bool) -> void:

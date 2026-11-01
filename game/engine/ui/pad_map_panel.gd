@@ -97,7 +97,7 @@ func tick_capture(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	tick_capture(delta)
+	tick_capture(GameSpeed.real_delta(delta))   # 改键等待是人手节拍: 真实时间
 
 
 # ---------------------------------------------------------------- 界面

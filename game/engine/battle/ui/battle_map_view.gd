@@ -34,6 +34,7 @@ var _pulse_wait := 0
 var _anim: Array = []     # 正在播的 [slide, alpha] 序列
 var _anim_i := 0
 var _t := 0.0
+var _scroll_t := 0.0   # 按住卷动的真实时间累加 (见 _scroll_held)
 
 
 ## stage: 关卡号; dots: [[Vector2i 格, 阵营 0 我方 / 1 敌方 / 2 友军], ...]; _focus 保留参数 (原版不对准光标)
@@ -210,13 +211,22 @@ func _tick() -> void:
 		_apply_pulse()
 	else:
 		_pulse_wait -= 1
-	if not closing:
-		var hd := InputRouter.held_dir() if is_inside_tree() else Vector2i.ZERO
+
+
+## 按住方向键卷动: 每 40 ms **真实时间**一步 (人手节拍)。放在游戏时钟的 _tick 里的话, 游戏加速 N 倍后点一下方向键也会卷 N 倍的步数
+func _scroll_held(real_dt: float) -> void:
+	_scroll_t += real_dt
+	while _scroll_t >= TICK:
+		_scroll_t -= TICK
+		if closing:
+			continue
+		var hd := InputRouter.held_dir()
 		if hd != Vector2i.ZERO:
 			scroll(hd)
 
 
 func _process(delta: float) -> void:
+	_scroll_held(GameSpeed.real_delta(delta))
 	_t += delta
 	while _t >= TICK:
 		_t -= TICK

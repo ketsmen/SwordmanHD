@@ -138,7 +138,7 @@ func open() -> bool:
 
 
 func _process(delta: float) -> void:
-	_age += delta
+	_age += GameSpeed.real_delta(delta)   # 防误触窗口是人手节拍: 真实时间, 不随游戏速度缩短
 	_t += delta
 	_frame_ms.append(delta * 1000.0)
 	if _frame_ms.size() > 120:

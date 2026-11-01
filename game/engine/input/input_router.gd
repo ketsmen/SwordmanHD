@@ -76,6 +76,8 @@ var _axes := {}
 var _pad_table := PadMap.resolve(PadMap.DEFAULT_PRESET, {})   # 手柄键 -> [动作名]
 var _key_table := KeyMap.resolve({})   # 键盘键 (可带 Shift) -> [动作名]
 var _trig := {PadMap.TRIGGER_L: false, PadMap.TRIGGER_R: false}   # 扳机虚拟键是否按下
+var _pad_dirs := {}         # 手柄十字键里正按着的方向 (UiAction.UP..) -> true; 手柄断开时要替它松开
+var _pad_down := {}         # 手柄上正按着的其它键 (键号, 含扳机虚拟键) -> true; 同上
 ## 设定面板「手柄按键设置」捕获新键时设置: 有效时手柄键 (含扳机) 不当游戏动作, 只把可绑定键的键号交给它
 ## 最近收到的按键 / 手柄键原始事件 (新的在前, 至多 RECENT_MAX 条), 诊断页显示: 安卓掌机 (RP6 等) 的实体键有的报手柄键、有的报键盘键,
 ## 两个物理键报同一个键号就没法分开绑 —— 让玩家把「按了什么键、系统报了什么」原样发回来
@@ -101,6 +103,31 @@ func _ready() -> void:
 	emulate_touch = DebugArgs.current().touch
 	if emulate_touch or Platform.is_mobile():
 		set_touch_mode(true)
+	Input.joy_connection_changed.connect(_on_joy_connection_changed)
+
+
+## 手柄断开 (蓝牙掉线 / 拔线): 系统不会补发「松开」, 不处理的话按着的方向会一直连发 (城镇里角色一直走、光标一直转)
+func _on_joy_connection_changed(_device: int, connected: bool) -> void:
+	if not connected:
+		release_pad()
+
+
+## 把手柄上按着的东西全部松开: 十字键 / 摇杆方向 / 扳机 / 其它键 (需要松键动作的补发一次), 摇杆轴值清零。没按着任何东西时什么都不发
+func release_pad() -> void:
+	for k in _pad_dirs.keys():
+		_press(k, false, "pad")
+	_pad_dirs.clear()
+	if _stick != Vector2i.ZERO:
+		for k in UiAction.DIRS:
+			if UiAction.DIRS[k] == _stick:
+				_press(k, false, "pad")
+		_stick = Vector2i.ZERO
+	_axes.clear()
+	for b in _pad_down.keys():
+		_pad_button(b, false)
+	_pad_down.clear()
+	for tb in _trig:
+		_trig[tb] = false
 
 
 # ---------------- 界面栈 ----------------
@@ -250,11 +277,27 @@ func held_dir() -> Vector2i:
 ## 按固定优先级取按住的方向 (order: UiAction.UP... 的先后); 都没按住返回 ZERO。
 ## 城镇行走用: 按 上 > 下 > 左 > 右 依次查 GetKeyState, 同时按住多个键时不看先后 (差异)
 func held_dir_by_priority(order: Array) -> Vector2i:
+	var k := held_key_by_priority(order)
+	return UiAction.DIRS[k] if k != UiAction.NONE else Vector2i.ZERO
+
+
+## 同 held_dir_by_priority, 返回按住的方向动作 (UiAction.UP..); 都没按住返回 UiAction.NONE。配合 hold_age / hold_id 用
+func held_key_by_priority(order: Array) -> int:
 	var h := repeat.held()
 	for k in order:
 		if k in h:
-			return UiAction.DIRS[k]
-	return Vector2i.ZERO
+			return k
+	return UiAction.NONE
+
+
+## 方向动作 k 这一次按下已按住的**真实**秒数 (不随游戏速度变; 没按住 -1)
+func hold_age(k: int) -> float:
+	return repeat.age(k)
+
+
+## 方向动作 k 这一次按下的序号 (松开再按会变; 没按住 0)
+func hold_id(k: int) -> int:
+	return repeat.press_id(k)
 
 
 ## 按住 Ctrl 快进对白 (扩展)
@@ -284,9 +327,11 @@ func _notification(what: int) -> void:
 
 
 func _process(delta: float) -> void:
-	_time += delta
+	# 按住连发 / 触摸手势按**真实时间**走: delta 已被游戏速度 (Engine.time_scale) 放大, 不还原的话 2~5 倍速下光标连发间隔缩成 0.2 / 倍数 秒, 左右按住时飞走 (玩家反馈 2026-11-01)
+	var real_dt := GameSpeed.real_delta(delta)
+	_time += real_dt
 	_poll_pointer_target()
-	for k in repeat.tick(delta, _repeat_interval()):
+	for k in repeat.tick(real_dt, _repeat_interval()):
 		dispatch(UiAction.new(k, "key", Vector2.INF, true))
 	for a in gestures.tick(_time):
 		dispatch(a)
@@ -329,6 +374,10 @@ func _handle(e: InputEvent) -> bool:
 		if JOY_DPAD.has(e.button_index):
 			if not pad_capture.is_valid():
 				_press(JOY_DPAD[e.button_index], e.pressed, "pad")
+				if e.pressed:
+					_pad_dirs[JOY_DPAD[e.button_index]] = true
+				else:
+					_pad_dirs.erase(JOY_DPAD[e.button_index])
 			return true
 		_pad_button(e.button_index, e.pressed)
 		return true
@@ -421,6 +470,10 @@ func set_pad(preset: String, overrides: Dictionary) -> void:
 
 ## 一个手柄键 (含扳机虚拟键) 按下/松开: 捕获中只回报键号, 否则按映射派发它绑定的动作
 func _pad_button(b: int, pressed: bool) -> void:
+	if pressed:
+		_pad_down[b] = true
+	else:
+		_pad_down.erase(b)
 	if pad_capture.is_valid():
 		if pressed and PadMap.is_bindable(b):
 			pad_capture.call(b)

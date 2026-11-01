@@ -11,6 +11,9 @@ const REPEAT := 0.2   # 之后每格的间隔
 const MAX_PER_TICK := 2   # 一帧最多补发几次: 窗口被拖住/卡顿后一次 dt 很大时, 不能一口气连发几十下 (光标飞走、对白连翻)
 
 var _held: Array = []   # 按下顺序的方向动作 (UiAction.UP...)
+var _age := {}          # 方向动作 -> 已按住的秒数 (tick 的 dt 累加, 调用方传真实时间就是真实按住时长)
+var _ids := {}          # 方向动作 -> 这一次按下的序号 (每次 press 递增; 区分「还是同一次按住」与「松开后重新按」)
+var _serial := 0
 var _t := 0.0
 var _repeating := false
 
@@ -19,6 +22,9 @@ func press(kind: int) -> Array:
 	if kind in _held:
 		return []
 	_held.append(kind)
+	_serial += 1
+	_ids[kind] = _serial
+	_age[kind] = 0.0
 	_t = 0.0
 	_repeating = false
 	return [kind]
@@ -27,6 +33,8 @@ func press(kind: int) -> Array:
 func release(kind: int) -> void:
 	var was_top: bool = not _held.is_empty() and _held[-1] == kind
 	_held.erase(kind)
+	_ids.erase(kind)
+	_age.erase(kind)
 	if was_top:
 		_t = 0.0
 		_repeating = false
@@ -34,6 +42,8 @@ func release(kind: int) -> void:
 
 func clear() -> void:
 	_held.clear()
+	_ids.clear()
+	_age.clear()
 	_t = 0.0
 	_repeating = false
 
@@ -41,6 +51,16 @@ func clear() -> void:
 ## 当前按住的全部方向 (按下顺序)
 func held() -> Array:
 	return _held.duplicate()
+
+
+## 这个方向已按住多少秒 (没按住 -1)。tick 传真实 dt 时就是真实按住时长: 城镇走路用它区分「点按」和「按住」(见 TownHeroGait.HOLD_GATE)
+func age(kind: int) -> float:
+	return float(_age.get(kind, -1.0))
+
+
+## 这个方向当前这次按下的序号 (没按住 0); 松开再按序号变
+func press_id(kind: int) -> int:
+	return int(_ids.get(kind, 0))
 
 
 ## 当前按住的方向 (最后按下的); 没有为 UiAction.NONE
@@ -53,6 +73,8 @@ func current() -> int:
 func tick(dt: float, interval := REPEAT) -> Array:
 	if _held.is_empty():
 		return []
+	for k in _age:
+		_age[k] += dt
 	_t += dt
 	var out: Array = []
 	if not _repeating:

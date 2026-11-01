@@ -4,7 +4,8 @@ extends "res://tests/test_base.gd"
 const REQUIRES_TEST := {
 	"test_pulse_and_close_animation": ["original"],
 	"test_small_map_centered_no_arrows": ["original"],
-	"test_tall_map_scroll_and_arrows": ["original"]
+	"test_tall_map_scroll_and_arrows": ["original"],
+	"test_held_scroll_steps_in_real_time_when_game_is_sped_up": ["original"]
 }  # 个别方法的依赖 (同上)
 
 
@@ -66,4 +67,18 @@ func test_pulse_and_close_animation():
 	eq(v.position, Vector2(62, 42), "滑到左 16 像素")
 	v._tick()
 	check(v.is_queued_for_deletion(), "播完自行释放")
+	v.free()
+
+
+## 按住方向键卷动按真实时间 (每 40 ms 一步): 游戏 3 倍速下点按 0.1 秒不能多卷 3 倍
+func test_held_scroll_steps_in_real_time_when_game_is_sped_up():
+	var v := BattleMapView.new(17, Vector2i(22, 93), [])
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	InputRouter.repeat.press(UiAction.DOWN)
+	for i in 5:   # 游戏 0.6 秒 = 真实 0.2 秒 = 5 步
+		v._scroll_held(GameSpeed.real_delta(0.12))
+	InputRouter.repeat.clear()
+	Engine.time_scale = saved
+	eq(v.scroll_pos.y, 5 * 3.0, "真实 0.2 秒按住 = 5 步 x 3 像素, 不是 15 步")
 	v.free()

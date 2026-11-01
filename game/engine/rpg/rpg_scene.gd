@@ -16,8 +16,8 @@ var SCREEN: Vector2 = UiLayout.base_size()  # 原版画面大小 (布局表 base
 ## 城镇行走: 每格固定 0.4 秒 (10 tick, 四个方向相同; 原版 实测: 按住方向键时逻辑格每 0.40 秒前进一格, 左右上下一致,
 ## 重制版 getMoveSpeed(2) = 100 像素/秒会让横向 0.30 秒/格、纵向 0.24 秒/格, 比原版快)
 const STEP_TIME := 0.4
-var _seg_goal := Vector2.INF   # 当前一格的目标点与速度 (进入每一格时按剩余距离 / STEP_TIME 算)
-var _seg_speed := 0.0
+const NPC_STAND_TICKS := 3   # 城镇 NPC / 物件站立每帧 tick 数 (原版实测)
+var _seg_goal := Vector2.INF   # 当前一格的目标点 (进入每一格时登记; 逐帧节拍与位置见 TownHeroGait)
 const DIRS := {BattleUnit.Dir.SOUTH: Vector2i(0, 1), BattleUnit.Dir.WEST: Vector2i(-1, 0),
 	BattleUnit.Dir.NORTH: Vector2i(0, -1), BattleUnit.Dir.EAST: Vector2i(1, 0)}
 
@@ -26,6 +26,8 @@ var entry := 0
 var vm: RpgVM
 var world: Node2D
 var hero: AnimPlayer
+var gait: TownHeroGait   # 主角走路的逐 tick 节拍
+var _walk_base := 0      # 当前朝向行走首帧的帧号
 var hx := 0
 var hy := 0
 var hdir := BattleUnit.Dir.SOUTH
@@ -38,6 +40,7 @@ var anims := {}          # 事件动画 "id id2" -> AnimPlayer
 var objs1 := {}
 var _path: Array = []
 var _moving := false
+var _stepped_press := 0   # 已经起过步的那次方向键按下的序号 (KeyRepeat.press_id; 见 _held_walk)
 var _busy := false       # 事件执行中, 屏蔽操作
 var _black: ColorRect
 var _screen_mask: RpgScreenMask   # 整屏事件动画的宽屏留边遮罩 (见 _refresh_screen_mask)
@@ -82,6 +85,7 @@ func _ready() -> void:
 			continue
 		var a := AnimPlayer.new()
 		a.play_sound = false
+		a.tick_override = NPC_STAND_TICKS   # 原版实测: NPC 站立每帧恒 3 tick, 与帧自带 time 无关 (time=3 的 NPC 也是 3 tick), 同屏 NPC 同相换帧
 		a.cull_offscreen = true  # 城镇物件/NPC: 屏外不取帧 (显存)
 		a.position = Vector2(o["x"], o["y"])
 		a.z_index = int(o["y"] / FxPlace.CELL.y)
@@ -94,6 +98,7 @@ func _ready() -> void:
 	hero = AnimPlayer.new()
 	hero.play_sound = false
 	world.add_child(hero)
+	gait = TownHeroGait.new()
 	var p: Dictionary = st.pos[mini(entry, st.pos.size() - 1)]
 	_place_hero(int(p["x"]), int(p["y"]), int(p["dir"]))
 	_follow(true)
@@ -331,27 +336,35 @@ func _place_hero(x: int, y: int, d: int) -> void:
 	_hero_act(false, d)
 
 
-## 重制版 playAnimationRPG: 站立 = dir*站立帧数, 行走 = 站立帧数*4 + dir*行走帧数
+## 重制版 playAnimationRPG: 站立 = dir*站立帧数, 行走 = 站立帧数*4 + dir*行走帧数。
+## 城镇主角精灵没有起步 / 收步帧, 节拍 (帧 1/2/2/5 tick、位置分三段跳、停下后末帧多停 3 tick、站立每帧 2 tick) 在 TownHeroGait,
+## 行走帧由场景按它的节拍逐个 show_frame (AnimPlayer 只能每帧同长)
 func _hero_act(moving: bool, d: int) -> void:
 	hdir = d
 	var data := Assets.anim(ThemeAssets.p("rpg.hero"))
 	var c: Array = data["action_counts"]
 	var stand := maxi(1, int(c[0]))
 	var move := maxi(1, int(c[1]))
-	var s := stand * 4 + d * move if moving else d * stand
-	var e := s + (move if moving else stand)
 	if moving:
-		# 行走: 每走一格 (10 tick) 重新走一轮行走帧, 每帧 2 tick, 走完停在末帧到下一格; 帧上的脚步声随之触发
-		# (原版 实测: 钩 PlaySfx, 每格第 2/6 tick 各一声 s0/s1, 与动画数据的帧 1、3 对应)
+		gait.n = move
+		_walk_base = stand * 4 + d * move
+		gait.face_walk()
+		# 行走: 帧 1、3 带脚步声 (原版 实测: 钩 PlaySfx, 每格第 2/6 tick 各一声 s0/s1)
 		hero.play_sound = true
-		hero.tick_override = 2
-		hero.play(ThemeAssets.p("rpg.hero"), s, e, false)
+		_show_walk_frames()
 		return
+	gait.cancel_tail()
+	var s := d * stand
 	hero.play_sound = false
-	hero.tick_override = 0
+	hero.tick_override = TownHeroGait.STAND_TICKS   # 原版城镇站立每帧 2 tick (逐 tick 实测 80ms; 战场站立才是帧自带的 3 tick)
 	if hero.dir == ThemeAssets.p("rpg.hero") and hero.start_frame == s and hero.playing:
 		return
-	hero.play(ThemeAssets.p("rpg.hero"), s, e)
+	hero.play(ThemeAssets.p("rpg.hero"), s, s + stand)
+
+
+func _show_walk_frames() -> void:
+	for k in gait.take_frames():
+		hero.show_frame(ThemeAssets.p("rpg.hero"), _walk_base + k)
 
 
 func _process(delta: float) -> void:
@@ -362,37 +375,66 @@ func _process(delta: float) -> void:
 			_cam_moving = false
 			camera_arrived.emit()
 	if _moving:
-		var target: Vector2i = _path[0]
-		var goal := FxPlace.at_cell(target, "object")
-		if goal != _seg_goal:
-			_seg_goal = goal
-			_seg_speed = hero.position.distance_to(goal) / STEP_TIME
-		hero.position = hero.position.move_toward(goal, _seg_speed * delta)
-		hero.z_index = int((hero.position.y - FxPlace.offset("object").y) / FxPlace.CELL.y)
-		if hero.position.is_equal_approx(goal):
-			hx = target.x
-			hy = target.y
-			_path.pop_front()
-			var step := int(st.cell(hx, hy).get("step", 0))
-			if step > 0:
-				_path.clear()
-				_moving = false
-				_hero_act(false, hdir)
-				_run(step)
-			elif _path.is_empty():
-				_moving = false
-				_hero_act(false, hdir)
-				_after_walk()
-			else:
-				_face_next()
-		if not _cam_moving:
-			_follow(false)
-	elif not _busy and not _overlay_open() and InputRouter.top() == self:
-		var hd := InputRouter.held_dir_by_priority(RpgStage.KEY_PRIORITY)  # 按住连续行走; 同时按多键固定 上>下>左>右
-		for d in DIRS:
-			if DIRS[d] == hd:
-				_step(d)
+		_walk_tick(delta)
+	else:
+		var stand_dir := gait.update_tail(delta)   # 走完停下的收尾到点: 换站立
+		if stand_dir >= 0:
+			_hero_act(false, stand_dir)
+	if not _moving and not _busy and not _overlay_open() and InputRouter.top() == self:
+		_held_walk(InputRouter)
 	world.position = -RpgStage.snap_camera(cam, _display_mult())
+
+
+## 按住方向键走路 (空闲时每帧调; router = 输入层)。同时按多键固定 上>下>左>右。
+## 新按下立刻走一格; 同一次按下走完一格后键还按着, 真实按住时长够 TownHeroGait.HOLD_GATE 才接着走 (游戏加速时点按不会多走一格, 见该常量);
+## 等门槛期间保持行走末帧 (不闪回站立), 松键后照常收尾。
+## 只有真的起步才记下这次按下的序号: 被墙挡住只转向的, 每帧继续试 (原版是逐帧查键的)
+func _held_walk(router: Object) -> void:
+	var k: int = router.held_key_by_priority(RpgStage.KEY_PRIORITY)
+	if k == UiAction.NONE:
+		return
+	var id: int = router.hold_id(k)
+	if not TownHeroGait.may_chain(id != _stepped_press, router.hold_age(k)):
+		gait.settle(hdir)
+		return
+	var hd: Vector2i = UiAction.DIRS[k]
+	for d in DIRS:
+		if DIRS[d] == hd:
+			_step(d)
+			if _moving:
+				_stepped_press = id
+
+
+## 主角走一格的逐帧推进 (节拍与位置在 gait); 走满一格后接着走 / 触发踩踏事件 / 停下
+func _walk_tick(delta: float) -> void:
+	var target: Vector2i = _path[0]
+	var goal := FxPlace.at_cell(target, "object")
+	if goal != _seg_goal:
+		_seg_goal = goal
+		gait.begin(hero.position, goal)
+	var arrived := gait.advance(delta)
+	hero.position = gait.position
+	_show_walk_frames()
+	hero.z_index = int((hero.position.y - FxPlace.offset("object").y) / FxPlace.CELL.y)
+	if arrived:
+		_seg_goal = Vector2.INF
+		hx = target.x
+		hy = target.y
+		_path.pop_front()
+		var step := int(st.cell(hx, hy).get("step", 0))
+		if step > 0:
+			_path.clear()
+			_moving = false
+			_hero_act(false, hdir)
+			_run(step)
+		elif _path.is_empty():
+			_moving = false
+			gait.settle(hdir)   # 走完: 行走末帧再停 3 tick 才站立 (被对话 / 转身打断则立即站立)
+			_after_walk()
+		else:
+			_face_next()
+	if not _cam_moving:
+		_follow(false)
 
 
 ## 窗口里 1 个原版像素占几个物理像素 (同 ScreenLayout.display_mult 的算法, 这里直接用场景自己的窗口和原版画面尺寸, 不多引用 autoload)

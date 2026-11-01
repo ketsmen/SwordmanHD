@@ -15,6 +15,8 @@ static var LOG_SFX := DebugArgs.current().sfx_log
 const SCREEN_BLEND := preload("res://shaders/screen_blend.gdshader")
 const DARK_MASK := preload("res://shaders/dark_mask.gdshader")
 const RED_TINT := preload("res://shaders/red_tint.gdshader")
+const PART_TINT := preload("res://shaders/part_tint.gdshader")
+const PART_INVERT := preload("res://shaders/part_invert.gdshader")
 
 var dir := ""
 ## 红色版: 把动画里的蓝白色换成红色 (隐藏宝箱的闪光), 其余 (帧、节奏、混合方式) 与原动画相同。要在 play() 之前设
@@ -29,6 +31,10 @@ var frame := -1
 var play_sound := true
 ## >0: 每帧固定这么多 tick (忽略帧自带的 time)。城镇主角行走: 原版 实测每步 (10 tick) 重新走一轮 4 帧、每帧 2 tick (脚步声在每步的第 2、6 tick)
 var tick_override := 0
+## 从范围内第几帧起播 (play() 之前设, 用完自动清零); 循环动画照常绕回。战场行走原版从第 1 帧起 (1,2,3,0,1,...), 转弯时帧号接着走
+var start_at := 0
+## 起播时已经「播过」的秒数 (play() 之前设, 用完清零), 叠在 start_at 之后: 战场单位回站立时按全局 3 tick 网格对相位 (见 BattleUnit)
+var start_skew := 0.0
 var cull_offscreen := false  # 屏外只推进时间不换帧 (不取贴图): 城镇里全部 NPC/物件循环播放会把整个目录的帧都载入显存; 只用于不依赖 frame_shown/声音的动画
 var other: AnimPlayer   # 部件 tex=null 时按 ref 引用它的帧 (近景攻击动画里画被打的一方)
 var _time := 0.0
@@ -63,11 +69,28 @@ func play(anim_dir: String, start := 0, end := -1, looped := true) -> void:
 	for i in range(start_frame, end_frame):
 		_durs.append(TICK * (tick_override if tick_override > 0 else 1 + maxi(0, int(data["frames"][i]["time"]))))
 		_total += _durs[-1]
-	_time = 0.0
-	_abs_prev = 0
+	_time = start_skew
+	start_skew = 0.0
+	var first := clampi(start_at, 0, _durs.size() - 1)
+	start_at = 0
+	for i in first:
+		_time += _durs[i]
+	_abs_prev = first
 	playing = true
 	frame = -1
-	_show(start_frame)
+	var shown := first
+	if _time > 0.0 and loop and _total > 0.0:   # 起播时间已经跨过若干帧 (start_skew): 直接显示那一帧
+		var t := fmod(_time, _total)
+		shown = 0
+		while shown < _durs.size() - 1 and t >= _durs[shown] - EPS:
+			t -= _durs[shown]
+			shown += 1
+	_show(start_frame + shown)
+
+
+## 把刚 play() 的动画往后推 sec 秒才开始计时: 单位在本帧中途到格, 子动画同一帧还会按整帧 delta 推进, 多走的那一段要还回去
+func delay_start(sec: float) -> void:
+	_time -= maxf(sec, 0.0)
 
 
 ## 只显示某一帧, 不播放
@@ -193,7 +216,7 @@ func _setup(s: Sprite2D, p: Dictionary) -> void:
 		if ri >= od["frames"].size() or od["frames"][ri]["parts"].is_empty():
 			ri = 1
 		var op: Dictionary = od["frames"][ri]["parts"][0]
-		p = {"tex": op["tex"], "x": p["x"], "y": p["y"], "type": op["type"], "p8": op["p8"], "p10": op["p10"], "_dir": od["dir"]}
+		p = {"tex": op["tex"], "x": p["x"], "y": p["y"], "type": op["type"], "p8": op["p8"], "p10": op["p10"], "p12": op.get("p12", 0), "_dir": od["dir"]}
 	var t := Assets.tex("%s/t%d.png" % [p.get("_dir", data["dir"]), int(p["tex"])])
 	s.texture = t["texture"]
 	s.scale = Vector2.ONE * float(t["scale"])
@@ -204,26 +227,65 @@ func _setup(s: Sprite2D, p: Dictionary) -> void:
 		s.region_rect = Rect2(Vector2.ZERO, clip_to / s.scale)
 		s.region_filter_clip_enabled = true
 	var type: int = p["type"]
-	var k := minf(int(p["p8"]) * 0.05, 1.0) if int(p["p10"]) == 16 else 1.0
+	var k := 1.0   # type 0 原样拷贝 (不看 p8 / p10); type 1 只看 p8: 源 * p8/16 + 底 * (16-p8)/16 (静态观察); 旧的 p10==16 时 p8*0.05 是重制版的算法
+	var dim := 1.0   # type 2 且 p10 = 0: 原版 源*p8/16 不透明覆盖 (只在 p8 = 16 时才等于原图)
 	if type == 2 and int(p["p10"]) == 0:
 		type = 0
+		dim = clampf(int(p["p8"]) / 16.0, 0.0, 1.0)
 	s.modulate = Color(1, 1, 1, 1)
 	s.material = null
 	if recolor_red and type <= 1:   # 红色版: 普通部件也换红 (发光部件在下面的混合材质里换)
 		s.material = _red_material()
-	if type == 1 and int(p["p10"]) != 16:
-		# 原版实测: 人物脚下影子 (type 1, p8=8) 是半透明的, 地面透出约一半 (B4 近景对照); 重制版按不透明画成纯黑
+	if type == 1:
+		# 人物脚下影子 (type 1, p8=8) 是半透明的, 地面透出约一半 (原版实测 B4 近景对照); p10 原版不读
 		s.modulate.a = clampf(int(p["p8"]) / 16.0, 0.0, 1.0)
 	elif type <= 1:
-		s.modulate.a = k
+		s.modulate = Color(dim, dim, dim, k)
 	elif type == 7:
 		s.material = _material(DARK_MASK, 1.0)
+	elif type == 3 or type == 4:   # 纯色着色: 颜色 = p12 (RGB555), 权重按原版权重表 (p>>1)/8
+		s.material = _tint_material(type, int(p["p8"]), int(p["p10"]), int(p.get("p12", 0)))
+	elif type == 5 or type == 6:   # 反色: 5 = 源图反色, 6 = 形状内底色反色
+		s.material = _invert_material(type == 6)
 	else:   # 发光 (type 2~6): 饱和相加, 源 p8/16、底保留 p10/16 (shaders/screen_blend.gdshader)
 		var w := glow_weights(int(p["p8"]), int(p["p10"]))
 		s.material = _glow_material(w[0], w[1], recolor_red)
 
 
 static var _mats := {}
+
+## 原版权重表 T[k][c] 的 k = p>>1 (每档 1/8, p>16 饱和成 1 以上由混合夹成白); p12 = RGB555 -> 0~1 的 RGB
+static func tint_weight(p: int) -> float:
+	return float(maxi(p, 0) >> 1) / 8.0
+
+
+static func rgb555(v: int) -> Color:
+	var u := v & 0xFFFF
+	return Color(((u >> 10) & 31) / 31.0, ((u >> 5) & 31) / 31.0, (u & 31) / 31.0)
+
+
+static func _tint_material(type: int, p8: int, p10: int, p12: int) -> ShaderMaterial:
+	var key := "tint:%d:%d:%d:%d" % [type, p8, p10, p12]
+	if not _mats.has(key):
+		var m := ShaderMaterial.new()
+		m.shader = PART_TINT
+		var c := rgb555(p12)
+		m.set_shader_parameter("col", Vector3(c.r, c.g, c.b))
+		m.set_shader_parameter("col_k", tint_weight(p8))
+		m.set_shader_parameter("src_k", 0.0 if type == 3 else tint_weight(p10))
+		m.set_shader_parameter("dst_keep", tint_weight(p10) if type == 3 else 0.0)
+		_mats[key] = m
+	return _mats[key]
+
+
+static func _invert_material(screen: bool) -> ShaderMaterial:
+	var key := "invert:%s" % screen
+	if not _mats.has(key):
+		var m := ShaderMaterial.new()
+		m.shader = PART_INVERT
+		m.set_shader_parameter("invert_screen", screen)
+		_mats[key] = m
+	return _mats[key]
 
 ## 发光部件的混合权重 [源权重, 底保留] = [p8/16, p10/16] (夹在 0~1): 结果 = 底*底保留 + 源*源权重 (饱和相加), 见 shaders/screen_blend.gdshader
 static func glow_weights(p8: int, p10: int) -> Array:

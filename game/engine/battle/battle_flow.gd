@@ -250,7 +250,7 @@ func _ai_phase(filter: Callable) -> void:
 		if m != Vector2i(u.cx, u.cy):
 			path = rules.commit_move(u, m)
 			if not path.is_empty():
-				u.walk(path, BattleStage.WALK_SPEED)
+				u.walk(path, BattleStage.UNIT_WALK_SPEED)
 				await u.move_finished
 				bs.show_cursor(u.cx, u.cy)   # 原版光标框随单位到落点 (B4 实录)
 		var act: Dictionary = plan.action

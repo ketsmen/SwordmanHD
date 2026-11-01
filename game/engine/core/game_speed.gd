@@ -24,3 +24,10 @@ static func set_tenths(v: int) -> void:
 static func apply() -> void:
 	if not PlayLog.replaying():
 		Engine.time_scale = factor
+
+
+## 把 _process 收到的 delta (已被 Engine.time_scale 放大) 还原成真实经过的秒数。
+## 人手操作的节拍 (按住连发、点按 / 长按判定、防误触窗口、改键等待、按住转点按的判断) 用它; 演出 / 动画 / 逐字 / 移动用游戏时间 (原 delta)。
+## time_scale = 0 (回放暂停) 时没有真实推进的意义, 返回 0。
+static func real_delta(delta: float) -> float:
+	return delta / Engine.time_scale if Engine.time_scale > 0.001 else 0.0

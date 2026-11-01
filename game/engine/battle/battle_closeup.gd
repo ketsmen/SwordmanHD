@@ -12,10 +12,17 @@ var gc: GameContext = GameContext.current()  # 运行上下文 (引擎不直接�
 
 var bs
 var _root: Node2D        # 以屏幕中心为原点缩放
-var _stage: Node2D
+var _stage: Node2D       # 人物 / 特效层
+var _bgm: Node2D         # 背景层 (本关 FLOOR 底图); 震屏时永远跟着震
+var _bgg: Node2D         # 背景残影层 (unk4 bit0 时震屏中在「上一级偏移」处半透明再画一遍)
+var _stage_base := Vector2.ZERO   # _stage 的静止位置 (震屏在它上面加偏移)
+var _hit_id := 0     # 受击摆动的编号: 新一次命中 / 结算时旧的作废
+var _shake_id := 0   # 震屏的编号
+var _push_id := 0    # 被打方受击位移的编号
 var _black: ColorRect
-var _white: ColorRect
-var _red: ColorRect      # 格挡 (红闪避): 整个画面闪红约 0.3 秒, 伤害数字不变色 (原版实测 第 3 路)
+var _tint_top: ColorRect   # 色闪 级 4: 盖住所有东西 (含人物 / 特效), 加色
+var _tint_mid: ColorRect   # 色闪 级 1 / 3: 背景之上、人物之下, 加色
+var _tint_id := {3: 0, 4: 0}   # 各层色闪的编号 (新一次色闪作废旧的)
 var _sides := {}         # "left"/"right" -> {unit, misc: AnimPlayer, dir, panel: InfoPanel}
 var _ui: Node2D
 var _text: Node2D        # 不缩放的文字层
@@ -41,19 +48,32 @@ func _ready() -> void:
 	_stage = Node2D.new()
 	_stage.scale = Vector2.ONE * Assets.SCALE
 	_stage.position = -center * Assets.SCALE
+	_stage_base = _stage.position
 	_root.add_child(_stage)
-	_white = ColorRect.new()
-	_white.color = UiLayout.color(UiLayout.val("closeup.flash.white", "color", [1, 1, 1]))
-	_white.size = UiLayout.base_size() * Assets.SCALE
-	_white.visible = false
-	add_child(_white)
-	ScreenLayout.cover(_white, 2048.0)
-	_red = ColorRect.new()
-	_red.color = UiLayout.color(UiLayout.val("closeup.flash.red", "color", [1, 0, 0]))
-	_red.size = UiLayout.base_size() * Assets.SCALE
-	_red.visible = false
-	add_child(_red)
-	ScreenLayout.cover(_red, 2048.0)
+	for n in ["_bgm", "_bgg"]:   # 背景层与人物层同一坐标系, 排在人物层之下
+		var bg := Node2D.new()
+		bg.scale = _stage.scale
+		bg.position = _stage_base
+		_root.add_child(bg)
+		set(n, bg)
+	_root.move_child(_bgm, 0)
+	_root.move_child(_bgg, 1)   # 残影在背景之上
+	_bgg.visible = false
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_tint_top = ColorRect.new()
+	_tint_top.size = UiLayout.base_size() * Assets.SCALE
+	_tint_top.material = add
+	_tint_top.visible = false
+	add_child(_tint_top)
+	ScreenLayout.cover(_tint_top, 2048.0)
+	_tint_mid = ColorRect.new()
+	_tint_mid.size = UiLayout.base_size() * Assets.SCALE
+	_tint_mid.position = _stage_base
+	_tint_mid.material = add
+	_tint_mid.visible = false
+	_root.add_child(_tint_mid)
+	_root.move_child(_tint_mid, 2)   # 背景 (0) / 残影 (1) 之后, 人物层之前
 	_ui = Node2D.new()
 	_ui.scale = Vector2.ONE * Assets.SCALE
 	add_child(_ui)
@@ -70,6 +90,84 @@ static func misc_dir(u: BattleUnit) -> String:
 	return ThemeAssets.f("unit_misc", [s, s])
 
 
+## 命中帧 hit=1 时被打方整体位移 (原版 cfigthe .. 读, Windows 直读剧场对象位移变量确认): 每 tick 一步、共 3 步, 累计后回原位;
+## 普通 / 会心 / 连击 (NNNa) 步长 (-12,-8) (+9,+6) (+3,+2), 未命中 / 格挡 (NNNab) (-9,-6) (+6,+4) (+3,+2); 左侧单位按此, 右侧单位取反 (被推离画面中心)。
+## hit=2 / 3 的位移 (静态读码: 瞬移 ±(6,4) / 交替 ±(3,2)) 没有实测, 暂不做。
+const PUSH_STEPS := {false: [Vector2(-12, -8), Vector2(9, 6), Vector2(3, 2)], true: [Vector2(-9, -6), Vector2(6, 4), Vector2(3, 2)]}
+
+
+func _hit_push(m, left: bool, ab: bool) -> void:
+	_push_id += 1
+	var id := _push_id
+	var pos := Vector2.ZERO
+	for st in PUSH_STEPS[ab]:
+		pos += (st as Vector2) * (1.0 if left else -1.0)
+		m.position = pos
+		await get_tree().create_timer(0.04).timeout
+		if id != _push_id or not is_inside_tree():
+			return
+	m.position = Vector2.ZERO
+
+
+## 受击摆动 (原版 Win10 原生逐帧实测, 死魔鬼卒被殷剑平连击): 被命中的一方按 misc 帧 1 → 2 → 3 → 2 播一遍 (后退、再退、前冲、回摆; 部件 x 82 → 63 → 139 → 63,
+## 站立 107; 每帧 time=2 即 3 tick), 然后回到待机循环; 每次命中重新来一遍。原先只循环帧 1~2 (没有第 3 帧的前冲, 也不回摆)。
+func _hit_sway(dmisc, dir: String) -> void:   # dmisc 是 AnimPlayer (引擎层不新增对组装层类名的引用, 见 test_engine_deps)
+	_hit_id += 1
+	var id := _hit_id
+	dmisc.play(dir, 1, 4, false)
+	await dmisc.finished
+	if id != _hit_id:
+		return
+	dmisc.play(dir, 2, 3, false)
+	await dmisc.finished
+	if id != _hit_id or dmisc.data.is_empty():   # 个别单位没有近景 misc 动画: 没有待机可回
+		return
+	var idl := idle_frame(dmisc.data)
+	dmisc.start_at = 1   # 原版实测: 受击后回到待机的第 2 帧 (不是第 1 帧), 之后仍按 3 tick 一帧
+	dmisc.play(dir, idl.x, idl.y)
+
+
+## 命中震屏 (原版 cfigthe 读内存查表, 静态观察 第 3 节): 逐级偏移 (原版像素), 每级 2 tick;
+## 命中帧头 shake=0 或 >12 不震; 与命中与否无关 (未命中 / 格挡也震); 相邻震屏帧后者打断前者从头来。播放时前面还有 2 tick 的零偏移 (见 _shake)。
+## **方向** = (shake-1)/3 取整: 0 上, 1 下, 2 左上, 3 右下; **幅度序列** = (shake-1)%3: 0 → 3,2,1 (6 tick), 1 → 6,4,2,1 (8 tick), 2 → 12,6,4,1 (8 tick)。
+## 旧的窗口实测 (5/6/9/11 记成 6,5,3,1) 是背景条带上主层 + 50% 残影层互相关的平均, 以读表为准。
+## 作用对象 (unk4): 背景永远震; 人物 / 攻击动画层仅 bit1 (2, 3) 时跟着震; bit0 (1, 3) 时背景在「上一级偏移」处再叠一层 50% 残影 (第一级残影在 0)。
+static func shake_offsets(shake: int, _unk4 := 0) -> Array:
+	if shake <= 0 or shake > 12:
+		return []
+	var amps: Array = [[3, 2, 1], [6, 4, 2, 1], [12, 6, 4, 1]][(shake - 1) % 3]
+	var d: Vector2 = [Vector2(0, -1), Vector2(0, 1), Vector2(-1, -1), Vector2(1, 1)][(shake - 1) / 3]
+	var out := []
+	for n in amps:
+		out.append(d * float(n))
+	return out
+
+
+const SHAKE_STEP := 0.08   # 每级 2 tick
+
+
+func _shake(shake: int, unk4: int) -> void:
+	_shake_id += 1
+	var id := _shake_id
+	var offs := shake_offsets(shake)
+	var k := _stage.scale   # 偏移是原版像素, 节点位置在放大后的坐标里 (倍数 = Assets.SCALE)
+	var steps := offs.size() + (1 if unk4 & 1 else 0)   # 残影层比主层晚一级结束 (Windows 直读: 残影变量比主层晚 2 tick)
+	for i in steps:
+		var o: Vector2 = offs[i] if i < offs.size() else Vector2.ZERO   # 主层从命中帧那个 tick 就开始偏移 (没有零前导)
+		_bgm.position = _stage_base + o * k
+		if unk4 & 2:
+			_stage.position = _stage_base + o * k
+		if unk4 & 1:
+			_bgg.visible = true
+			_bgg.position = _stage_base + (offs[i - 1] if i > 0 else Vector2.ZERO) * k
+		await get_tree().create_timer(SHAKE_STEP).timeout
+		if id != _shake_id or not is_inside_tree():
+			return
+	_bgm.position = _stage_base
+	_stage.position = _stage_base
+	_bgg.visible = false
+
+
 static func idle_frame(data: Dictionary) -> Vector2i:
 	var c: Array = data["action_counts"]
 	var f := 6 + (int(c[0]) if int(c[0]) > 0 else 1)
@@ -80,8 +178,13 @@ static func idle_frame(data: Dictionary) -> Vector2i:
 ## t = null: 施放者单人近景 (battle_type 2 绝技, 见 cast_solo), 底图取 at 格 (没给就取施放者所在格)
 ## hide_target: 远程技能 (battle_ranged = 1, 如无方飞剑) 从开场起守方就不在画面里, 命中帧才出现 (见 strike 的 ranged), 否则放大淡入和闪光期间守方先露脸再消失
 func open(a: BattleUnit, t: BattleUnit, at := Vector2i(-1, -1), hide_target := false) -> void:
-	for c in _stage.get_children():
+	for c in _stage.get_children() + _bgm.get_children() + _bgg.get_children():
 		c.queue_free()
+	_shake_id += 1   # 上一次近景没震完的收尾作废, 各层回原位
+	_bgm.position = _stage_base
+	_bgg.position = _stage_base
+	_bgg.visible = false
+	_stage.position = _stage_base
 	for c in _ui.get_children():
 		c.queue_free()
 	for c in _text.get_children():
@@ -92,8 +195,11 @@ func open(a: BattleUnit, t: BattleUnit, at := Vector2i(-1, -1), hide_target := f
 		var fl := AnimPlayer.new()
 		var cell: Dictionary = bs.st.cell(at.x, at.y) if at.x >= 0 else (bs.st.cell(t.cx, t.cy) if t != null else bs.st.cell(a.cx, a.cy))
 		var fd := Assets.anim(floor_dir)
-		fl.show_frame(floor_dir, clampi(int(cell.get("floor", 0)), 0, fd["frames"].size() - 1))
-		_stage.add_child(fl)
+		var ff := clampi(int(cell.get("floor", 0)), 0, fd["frames"].size() - 1)
+		fl.show_frame(floor_dir, ff)
+		_bgm.add_child(fl)
+		_bgg.add_child(fl.duplicate())   # 残影层: 同一张底图
+		_bgg.modulate.a = 0.5
 	for u in [a, t]:
 		if u == null:
 			continue
@@ -228,13 +334,22 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 	var on_frame := func(f: int):
 		var hide_def := (int(c[1]) > 0 and f >= int(c[1]) and f < int(c[2])) or f < hide_until
 		dmisc.visible = not hide_def
+		var cc := color_code(int(data["frames"][f]["color"]))   # 帧头的 color 字段: 近景色闪 (与命中结果无关, 每个有 color 的帧都触发)
+		if not cc.is_empty():
+			_color_flash(int(cc[0]), int(cc[1]))
+		if int(data["frames"][f]["shake"]) > 0:   # 帧头的震动字段: 命中震屏 (原版逐帧实测, 见 shake_offsets)
+			_shake(int(data["frames"][f]["shake"]), int(data["frames"][f]["unk4"]))
 		if int(data["frames"][f]["hit"]) > 0:
+			if int(data["frames"][f]["hit"]) == 1:
+				_hit_push(dmisc, _side_of(d) == "left", r["kind"] in ["miss", "guard"])
 			if r["kind"] in ["miss", "guard"]:  # 闪避/格挡: 守方格挡姿势
 				dmisc.play(dsd["dir"], 0, 1)
-				if not r.get("flash", {}).is_empty():
+				if r.get("crit", false):   # 格挡 + 会心 = 白闪 (原版 kind 7 / 9 只走白闪块, 不红)
+					_flash()
+				elif not r.get("flash", {}).is_empty():
 					_flash_red(r["flash"])
 			else:
-				dmisc.play(dsd["dir"], 1, 3)
+				_hit_sway(dmisc, dsd["dir"])   # 受击摆动: 帧 1 -> 2 -> 3 -> 2 再回待机 (原版逐帧实测); 原先只循环帧 1~2
 				if r["kind"] == "critical":
 					_flash()
 			if dmg > 0:  # 每个命中帧扣 伤害/命中帧数, 并白闪体力条
@@ -242,6 +357,7 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 	atk.frame_shown.connect(on_frame)
 	atk.play(atk_dir, 0, -1, false)
 	await atk.finished
+	_hit_id += 1   # 还没摆完的受击动画作废 (下面直接回待机 / 倒下)
 	atk.queue_free()
 	amisc.visible = true
 	dmisc.visible = true
@@ -317,21 +433,46 @@ func level_up_fx(u = null) -> void:
 		m.play(md, r.x, r.y)
 
 
+## 色闪 (原版 cfigthe / 步进; 静态观察 + Windows 直读状态确认): 命中 / 帧头 color 触发, 8 tick 阶梯加色,
+## 权重逐 tick = layout closeup.flash.steps.add16 (12,12,8,8,6,6,4,4 /16)。level: 1~3 = 背景之上人物之下, 4 = 盖住一切 (级 2 没有绘制代码读, 不可见)。
+## unit = 色号 1..7: 白 红 绿 蓝 黄 品红 青 (RGB555 0x7FFF 0x7C00 0x03E0 0x001F 0x7FE0 0x7C1F 0x03FF)。
+const FLASH_COLORS := [Color(1, 1, 1), Color(1, 0, 0), Color(0, 1, 0), Color(0, 0, 1), Color(1, 1, 0), Color(1, 0, 1), Color(0, 1, 1)]
+
+
+## 帧头 color 值 -> [级, 色号]; 0 / 级 2 (11~20) / 个位 0, 8, 9 无效返回空
+static func color_code(c: int) -> Array:
+	if c <= 0:
+		return []
+	var level := mini((c - 1) / 10 + 1, 4) if c <= 30 else 4
+	var unit := (c - 1) % 10 + 1 if c <= 30 else c - 30
+	if level == 2 or unit < 1 or unit > FLASH_COLORS.size():
+		return []
+	return [level, unit]
+
+
+func _color_flash(level: int, unit: int) -> void:
+	var layer := 4 if level == 4 else 3
+	var rect: ColorRect = _tint_top if layer == 4 else _tint_mid
+	_tint_id[layer] += 1
+	var id: int = _tint_id[layer]
+	var steps: Array = UiLayout.val("closeup.flash.steps", "add16", [12, 12, 8, 8, 6, 6, 4, 4])
+	var tick := float(UiLayout.num("closeup.flash.steps", "tick", 0.04))
+	rect.visible = true
+	for w in steps:
+		rect.color = (FLASH_COLORS[unit - 1] as Color) * (float(w) / 16.0)
+		await get_tree().create_timer(tick).timeout
+		if id != _tint_id[layer] or not is_inside_tree():
+			return
+	rect.visible = false
+
+
+## 会心白闪 (kind 3 / 5 / 7 / 9) / 格挡红闪 (kind 6 / 8): 命中帧起 8 tick, 级 4
 func _flash() -> void:
-	_white.visible = true
-	await SceneGuard.wait(self, UiLayout.num("closeup.flash.white", "sec", 0.05))
-	_white.visible = false
+	_color_flash(4, 1)
 
 
-## 格挡 (红闪避): 全屏叠加 flash.color, flash.sec 秒内线性褪到透明 (规则引擎 Attack.guard_flash 给出颜色与时长)。
-## 守方表现与普通闪避相同 (格挡姿势 misc 第 0~1 帧), 照常扣血、出伤害数字 (不变红), 没有文字
-func _flash_red(fl: Dictionary) -> void:
-	_red.color = Color(fl.get("color", Color.RED), UiLayout.color(UiLayout.val("closeup.flash.red", "color", [1, 0, 0])).a)
-	_red.visible = true
-	var tw := create_tween()
-	tw.tween_property(_red, "color:a", 0.0, float(fl.get("sec", 0.3)))
-	await tw.finished
-	_red.visible = false
+func _flash_red(_fl := {}) -> void:
+	_color_flash(4, 2)
 
 
 func _kill(m: AnimPlayer) -> void:

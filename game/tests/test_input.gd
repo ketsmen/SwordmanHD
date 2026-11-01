@@ -434,6 +434,39 @@ func test_gamepad_mapping():
 	r.free()
 
 
+## 手柄断开 (蓝牙掉线 / 拔线) 时系统不补发「松开」: 按着的方向、摇杆、扳机、按住中的键要自己松开, 否则角色一直走、光标一直转
+func test_pad_disconnect_releases_held_directions_and_buttons():
+	var r = _router()
+	var a := Rec.new()
+	r.push(a)
+	r._handle(_joy(JOY_BUTTON_DPAD_RIGHT))
+	eq(r.held_dir(), Vector2i(1, 0), "十字键按住")
+	r.release_pad()
+	eq(r.held_dir(), Vector2i.ZERO, "断开后十字键视为松开")
+	a.log.clear()
+	r._process(1.0)
+	eq(a.log, [], "断开后不再连发方向")
+	# 摇杆
+	r._handle(_stick(JOY_AXIS_LEFT_X, 0.9))
+	eq(r.held_dir(), Vector2i(1, 0), "摇杆推着")
+	r.release_pad()
+	eq(r.held_dir(), Vector2i.ZERO, "断开后摇杆视为回中")
+	r._handle(_stick(JOY_AXIS_LEFT_X, 0.9))
+	eq(r.held_dir(), Vector2i(1, 0), "重新连上推摇杆照常 (状态没被卡住)")
+	r.release_pad()
+	# 扳机 + 按住的键: 松开时各发一次松键动作
+	var map := {}
+	r._handle(_axis(JOY_AXIS_TRIGGER_LEFT, 1.0))
+	r._handle(_joy(JOY_BUTTON_X))   # 默认 X = info, 按住期间预览, 松开 = INFO_UP
+	a.log.clear()
+	r.release_pad()
+	check(a.log.has("info_up"), "断开时按住的 info 键补一个松开")
+	a.log.clear()
+	r.release_pad()
+	eq(a.log, [], "没有按住的东西时断开什么都不发")
+	r.free()
+
+
 ## 键盘全键 (原版按键: Enter Esc/Delete Space PgUp PgDn 方向 Tab F1 小键盘+/−)
 func test_keyboard_full_set():
 	var r = _router()
@@ -610,4 +643,95 @@ func test_key_capture_reports_keys_and_swallows_them():
 	r._handle(_key(KEY_ESCAPE))
 	eq(a.log, ["cancel"], "Esc 不被捕获: 仍是取消 (用来放弃改键)")
 	r.key_capture = Callable()
+	r.free()
+
+
+## 游戏加速 (Engine.time_scale > 1) 时按住连发仍按真实时间: 0.2 秒一格, 不能随倍数变快 (玩家反馈「加速后左右移动很快, 操作有问题」)
+func test_key_repeat_uses_real_time_when_game_is_sped_up():
+	var r = _router()
+	var rec := Rec.new()
+	r.push(rec)
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	r.repeat.press(UiAction.RIGHT)
+	rec.log.clear()
+	for i in 10:   # 游戏时间 delta 0.066 x 10 = 0.66 (真实 0.22 秒)
+		r._process(0.066)
+	var n := rec.log.size()
+	Engine.time_scale = saved
+	eq(n, 1, "3 倍速下真实 0.2 秒只发 1 次连发 (不是 3 次)")
+
+
+## 方向键按住时长与按下序号 (城镇走路区分点按 / 按住用): tick 传真实 dt, 年龄就是真实按住时长
+func test_key_repeat_tracks_hold_age_and_press_id():
+	var kr := KeyRepeat.new()
+	eq(kr.age(UiAction.RIGHT), -1.0, "没按住 -1")
+	eq(kr.press_id(UiAction.RIGHT), 0)
+	kr.press(UiAction.RIGHT)
+	var id1 := kr.press_id(UiAction.RIGHT)
+	check(id1 > 0, "按下后有序号")
+	kr.tick(0.1)
+	kr.tick(0.05)
+	check(absf(kr.age(UiAction.RIGHT) - 0.15) < 1e-9, "累加真实按住时长")
+	kr.press(UiAction.RIGHT)   # 已按住的重复 press (比如手柄 + 键盘同时) 不重置
+	eq(kr.press_id(UiAction.RIGHT), id1, "同一次按住序号不变")
+	kr.press(UiAction.UP)
+	kr.tick(0.05)
+	check(absf(kr.age(UiAction.RIGHT) - 0.2) < 1e-9 and absf(kr.age(UiAction.UP) - 0.05) < 1e-9, "每个方向各自计时")
+	kr.release(UiAction.RIGHT)
+	eq(kr.age(UiAction.RIGHT), -1.0, "松开清零")
+	kr.press(UiAction.RIGHT)
+	check(kr.press_id(UiAction.RIGHT) != id1, "松开再按是新的一次 (序号变)")
+	kr.clear()
+	eq([kr.age(UiAction.UP), kr.press_id(UiAction.UP)], [-1.0, 0], "clear 清掉")
+
+
+## 路由器按真实时间累加按住时长: 3 倍速下游戏 delta 0.12 = 真实 0.04
+func test_router_hold_age_is_real_time_when_game_is_sped_up():
+	var r = _router()
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	r._handle(_key(KEY_RIGHT))
+	for i in 5:
+		r._process(0.12)
+	var age: float = r.hold_age(UiAction.RIGHT)
+	Engine.time_scale = saved
+	check(absf(age - 0.2) < 1e-6, "按住 5 帧 x 真实 0.04 = 0.2 秒, 不是 0.6: %.3f" % age)
+	eq(r.held_key_by_priority(RpgStage.KEY_PRIORITY), UiAction.RIGHT)
+	r.free()
+
+
+## 触摸长按 (0.5 秒) 按真实时间: 3 倍速下游戏时间走 0.5 秒 (真实 0.17 秒) 不触发 "查看"
+func test_touch_long_press_uses_real_time_when_game_is_sped_up():
+	var r = _router()
+	var rec := Rec.new()
+	r.push(rec)
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	r._touch_event(0, Vector2(100, 100), true, false)
+	for i in 5:   # 游戏 0.6 秒 = 真实 0.2 秒
+		r._process(0.12)
+	eq(rec.log, [], "真实 0.2 秒还不是长按")
+	for i in 8:   # 再真实 0.32 秒, 共 0.52
+		r._process(0.12)
+	Engine.time_scale = saved
+	eq(rec.log, ["info"], "真实满 0.5 秒才算长按")
+	r.free()
+
+
+## 防误触窗口 (UiHit.GUARD 0.4 秒) 同样按真实时间: 3 倍速下界面刚出现的真实 0.2 秒内点按仍不算
+func test_pointer_guard_window_is_real_time_when_game_is_sped_up():
+	var r = _router()
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	r._pt_since = r._time
+	for i in 5:   # 真实 0.2 秒
+		r._process(0.12)
+	var early: bool = r._guarded()
+	for i in 6:   # 共真实 0.44 秒
+		r._process(0.12)
+	var late: bool = r._guarded()
+	Engine.time_scale = saved
+	check(early, "真实 0.2 秒仍在防误触窗口内")
+	check(not late, "真实 0.44 秒窗口结束")
 	r.free()

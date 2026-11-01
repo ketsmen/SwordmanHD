@@ -761,7 +761,7 @@ func _after_move() -> void:
 	if _moved < _move_count:
 		return
 	for u in _pending_moves:
-		if not u._path.is_empty():
+		if u.is_moving():   # 走完含收步动画 (原版单位走完才算, 见 BattleUnit)
 			await u.move_finished
 		_leave_if_off_map(u)
 	_pending_moves.clear()

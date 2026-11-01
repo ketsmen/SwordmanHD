@@ -60,7 +60,18 @@ func icon_menu(id: String, enabled: Array, sel: int, cell: Vector2i) -> UiIconMe
 	bs.units_node.add_child(m)
 	m.setup_id(id, enabled, sel)
 	m.position = UiIconMenu.place_near(cell, bs.cam, bs.view(), m.width(), m.height())
+	if id == "actionmenu.icons":
+		_fade_in(m)
 	return m
+
+
+## 行动菜单淡入 (原版 Windows 实测: 收步放完后 +1 tick 起可见, +6 tick 满显, 共 6 级, 有无收步起点相同): 每 tick 加 1/6 不透明度
+func _fade_in(m: UiIconMenu) -> void:
+	m.modulate.a = 0.0
+	var tw := m.create_tween()
+	for k in range(1, 7):
+		tw.tween_interval(0.04)
+		tw.tween_callback(func(): m.modulate.a = k / 6.0)
 
 
 ## 叠在 parent 之上的子菜单 (位置 = 上级菜单 + actionmenu.sub_pos, 原版)

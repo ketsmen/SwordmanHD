@@ -77,3 +77,19 @@ func test_tap_on_link_opens_and_tap_elsewhere_closes():
 	eq(closed, [false], "点别处 = 返回")
 	await _tree().process_frame
 	await _tree().process_frame
+
+
+## 防误触窗口按真实时间: 游戏 3 倍速时 _process 收到的 delta 被放大, 窗口不能缩成 0.1 秒
+func test_guard_window_is_real_time_when_game_is_sped_up():
+	var opened := []
+	var p := _open_panel(opened)
+	var saved := Engine.time_scale
+	Engine.time_scale = 3.0
+	p._age = 0.0
+	p._process(0.6)   # 游戏 0.6 秒 = 真实 0.2 秒 (< GUARD 0.3)
+	Engine.time_scale = saved
+	p.ui_action(UiAction.new(UiAction.CONFIRM, "key"))
+	eq(opened, [], "真实 0.2 秒内的确认仍算误触")
+	p.queue_free()
+	await _tree().process_frame
+	await _tree().process_frame

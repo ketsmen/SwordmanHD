@@ -41,3 +41,16 @@ func test_set_tenths_drives_time_scale_and_clamps():
 	eq(Engine.time_scale, 5.0, "夹在 5.0")
 	GameSpeed.set_tenths(0)
 	eq(Engine.time_scale, 1.0, "夹在 1.0, 不会比原速慢")
+
+
+## 人手节拍用的真实时间: delta 已被 time_scale 放大, real_delta 还原; 回放暂停 (time_scale 0) 时为 0
+func test_real_delta_undoes_time_scale():
+	Engine.time_scale = 1.0
+	eq(GameSpeed.real_delta(0.04), 0.04, "原速不变")
+	Engine.time_scale = 3.0
+	check(absf(GameSpeed.real_delta(0.12) - 0.04) < 1e-9, "3 倍速: 游戏 0.12 秒 = 真实 0.04 秒")
+	Engine.time_scale = 0.5
+	check(absf(GameSpeed.real_delta(0.02) - 0.04) < 1e-9, "回放慢放 0.5 倍也还原")
+	Engine.time_scale = 0.0
+	eq(GameSpeed.real_delta(0.0), 0.0, "暂停: 0, 不除零")
+	Engine.time_scale = 1.0   # 跑测试的循环不调 after_each: 自己还原, 否则后面靠 SceneTreeTimer 的测试永远等不到

@@ -32,6 +32,19 @@ var anim: AnimPlayer
 var _anim_dir := ""
 var sprite_override := -1   # >= 0: 顶替精灵号 (测试用, --teach=单位:技能@精灵; 让我方角色放妖怪专属技能的演出, 随战阵存录保存)
 var _path: Array = []
+## 走路的三段 (原版实测, Win10 原生逐帧): 确认移动后先原地播「起步」(殷剑平提起剑匣, 11 帧), 播完才开始走; 到格后播「收步」(放下剑匣),
+## 播完才算走完 (行动菜单这时才弹)。起步 / 走路 / 收步每帧都是 2 tick (0.08 秒; 原版逐帧实测: 走路每帧单位前进 10 像素), 站立才是 3 tick。精灵没有起步 / 收步动作 (action_counts[2] / [3] 为 0, 绝大多数单位) 就跳过这一段
+enum Phase { NONE, START, END }
+const PHASE_TICKS := 2   # 起步 / 走路 / 收步的每帧 tick 数
+const STAND_TICKS := 3   # 站立每帧 tick 数 (战场精灵一律 3)
+const TICK := 0.04       # 原版逻辑 tick (25 Hz)
+## 全局时钟 (所有单位共用, 每帧只加一次): 原版战场单位站立换帧落在全局 tick % 3 == 1 的网格上 (1300 / 1300 次实测, 所有单位同相),
+## 回站立后第一帧恒为帧 1, 按回站立那一刻的 tick % 3 显示 1 / 2 tick 或直接跳到第 2 帧显示 3 tick (实测 F, 53 次移动)
+static var _clock := 0.0
+static var _clock_frame := -1
+const WALK_STEPS := 3    # 走一格分几步跳 (每个行走帧跳 1/3 格, 原版实测位置随帧跳而不是匀速滑)
+var _phase := Phase.NONE
+var _phase_id := 0   # 每次换动作加一: 起步 / 收步的完成回调带着编号, 被别的动作打断后作废
 var _speed := 100.0
 
 var cx: int:
@@ -292,6 +305,9 @@ var name_text: String:
 
 
 var _fx: UnitStatusFx
+var _true_pos := Vector2.ZERO   # 走路时的连续位置 (position 是它按行走帧量化后的显示位置)
+var _seg_from := Vector2.ZERO   # 当前这一格的起点
+var _shadow: Sprite2D   # 脚下影子 (UnitShadow), 在 anim 之下
 
 
 func has_status(bit: int) -> bool:
@@ -386,9 +402,56 @@ func sprite_dir() -> String:
 
 
 func play_act(a: int, d: int) -> void:
+	_phase_id += 1   # 别的动作打断了起步 / 收步: 旧回调作废
+	_phase = Phase.NONE
+	_play_act(a, d)
+
+
+## 精灵有没有这一段动作: 2 = 起步, 3 = 收步 (action_counts 下标)
+func _has_group(g: int) -> bool:
+	var c: Array = _anim_data().get("action_counts", [])
+	return c.size() > 3 and int(c[g]) > 1   # 原版每组第 0 帧不显示, 只剩 1 帧的等于没有; 没有行走帧的精灵 (如 014 / 150) 照样有起步收步 (实测)
+
+
+## 本单位的动画数据; 没有动画目录 (测试里的空壳单位) 给空字典, 调用方按「没有这一段」处理
+func _anim_data() -> Dictionary:
+	return Assets.anim(_anim_dir) if _anim_dir != "" else {}
+
+
+## 在移动中: 有路没走完, 或在播起步 / 收步 (剧情等单位「走完」要连收步一起等)
+func is_moving() -> bool:
+	return not _path.is_empty() or _phase != Phase.NONE
+
+
+## 脚下影子 (原版实测每个单位都有, 精灵数据里没有: 见 UnitShadow); 建一次, 放在 anim 之下, 跟格子走 (不跟精灵)
+func _ensure_shadow(data: Dictionary) -> void:
+	if _shadow != null or anim == null or not UnitShadow.has_picture(data):
+		return
+	_shadow = Sprite2D.new()
+	_shadow.texture = UnitShadow.texture()
+	_shadow.scale = Vector2.ONE / float(UnitShadow.SUPERSAMPLE)   # 贴图是放大倍数的高分辨率版, 缩回原版像素大小
+	_shadow.modulate = Color(1, 1, 1, UnitShadow.ALPHA)
+	_shadow.position = UnitShadow.CENTER   # 单位节点原点 = 格子左上
+	add_child(_shadow)
+	move_child(_shadow, 0)
+
+
+func _step_dir(to: Vector2i) -> int:
+	var goal := Vector2(to.x * BattleStage.CELL_W, to.y * BattleStage.CELL_H)
+	if position.x != goal.x:
+		return Dir.EAST if goal.x > position.x else Dir.WEST
+	if position.y != goal.y:
+		return Dir.SOUTH if goal.y > position.y else Dir.NORTH
+	return dir
+
+
+func _play_act(a: int, d: int, at := 0) -> void:
 	act = a
 	dir = d
-	var data := Assets.anim(_anim_dir)
+	var data := _anim_data()
+	if data.is_empty():
+		return
+	_ensure_shadow(data)
 	var c: Array = data["action_counts"]
 	var stand := int(c[0])
 	var move := int(c[1])
@@ -404,9 +467,14 @@ func play_act(a: int, d: int) -> void:
 		Act.MOVE:
 			size = move
 			idx = base + stand * 4 + d * size
+			if move <= 0:   # 没有行走帧: 走路时固定显示行走组起点那一帧 (原版实测 014 / 150 / 209 等), 不播站立
+				size = 1
 		Act.MOVE_START:
 			size = mstart
 			idx = base + move * 4 + stand * 4 + d * size
+		Act.MOVE_END:
+			size = int(c[3])
+			idx = base + (move + stand + mstart) * 4 + d * size
 		Act.WIN:
 			size = win
 			idx = 2
@@ -414,52 +482,112 @@ func play_act(a: int, d: int) -> void:
 			if not data["frames"][0]["parts"].filter(func(p): return p["tex"] != null).is_empty():
 				size = 2
 				idx = 0
-	if size <= 0:
+	if size <= 0:   # 起步 / 收步 / 胜利没有这一组 (调用方有 _has_group 守着, 这里兜底), 按站立
 		size = maxi(stand, 1)
 		idx = base + d * size
 	anim.play_sound = a == Act.MOVE   # 只有行走帧带脚步声 (-> PlaySfx, 实测; 站立/出手近景声另走近景动画)
-	anim.play(_anim_dir, idx, idx + size, a != Act.WIN)
+	if a == Act.MOVE_START or a == Act.MOVE_END:   # 起步 / 收步: 第 0 帧不显示, 放第 1..n-1 帧 (原版实测总长 2*(n-1) tick)
+		idx += 1
+		size -= 1
+	# 起步 / 走路 / 收步每帧 2 tick, 站立每帧 3 tick, 都与帧自带的 time 无关 (原版实测 107 个战场精灵); 其余 (胜利 / 施法) 仍按帧自带的 time
+	anim.tick_override = PHASE_TICKS if a == Act.MOVE or a == Act.MOVE_START or a == Act.MOVE_END else (STAND_TICKS if a == Act.STAND else 0)
+	anim.start_at = at
+	if a == Act.STAND:   # 回站立: 从帧 1 起, 相位对到全局网格 (已「播过」的时间 = 2 / 3 / 1 tick (tick%3 = 0 / 1 / 2) + 本 tick 内已过的零头)
+		anim.start_at = 1
+		var tk := int(_clock / TICK + 1e-6)
+		anim.start_skew = float([2, 3, 1][tk % 3]) * TICK + (_clock - tk * TICK)
+	anim.play(_anim_dir, idx, idx + size, a != Act.WIN and a != Act.MOVE_START and a != Act.MOVE_END)
 
 
 ## 沿路径一格一格移动 (先横后纵), 速度为原版像素/秒
 func walk(path: Array, speed: float) -> void:
 	_path = path.duplicate()
 	_speed = speed
+	_true_pos = position
+	_seg_from = position
+	_phase_id += 1
+	_phase = Phase.NONE
 	if shown:   # 在场标志只由出场指令 (0x0B/0x17/0x4C) 与敌我出场流程置位; 走路指令 0x0F/0x11 只改坐标
 		visible = true
 	if _path.is_empty():
 		move_finished.emit()
+		return
+	if _has_group(2):   # 起步: 原地先播 (朝第一步的方向), 播完才开始走
+		_begin_phase(Phase.START, Act.MOVE_START, _step_dir(_path[0]))
+
+
+## 进入起步 / 收步阶段: 播一遍对应动作, 播完回调 (编号对不上说明被别的动作打断了, 什么都不做)
+func _begin_phase(ph: Phase, a: int, d: int) -> void:
+	_phase_id += 1
+	_phase = ph
+	_play_act(a, d)
+	var id := _phase_id
+	anim.finished.connect(func():
+		if id != _phase_id or _phase != ph:
+			return
+		_phase = Phase.NONE
+		if ph == Phase.START:
+			_play_act(Act.MOVE, dir, 1)   # 起步完了开始走 (位置没动过), 行走帧从第 1 帧起
+		else:
+			_play_act(Act.STAND, dir)
+			move_finished.emit(), CONNECT_ONE_SHOT)
 
 
 func _process(delta: float) -> void:
-	if _path.is_empty():
+	if Engine.get_process_frames() != _clock_frame:
+		_clock_frame = Engine.get_process_frames()
+		_clock += delta
+	if _path.is_empty() or _phase != Phase.NONE:
 		return
 	# 每格先横后纵; 用精确比较判断到格 (move_toward 在剩余距离不超过步长时正好落在目标上),
 	# 不设「差多少算到」的死区: 原先 |差| <= 0.01 不再移动、又要 is_equal_approx 才算到格,
 	# 帧长不整除格宽时 (非 25 帧/秒, 如 60/144Hz 显示器) 会停在差 0.00x 像素处永远走不完,
 	# 剧情行走 (0x0F/0x11)、AI 与我方移动都在等 move_finished, 于是整段剧情/回合卡死。
-	# 本帧走到格后剩余的步长接着走下一格, 速度不受帧率影响。
-	var step := _speed * delta
-	while step > 0.0 and not _path.is_empty():
+	# 本帧走到格后剩余的时间接着走下一格, 速度不受帧率影响。
+	# 按「每格用时」走 (原版实测: 横竖每格同样的时间, 见 BattleStage.UNIT_WALK_SPEED): 横向 _speed 像素/秒, 竖向按 CELL_H/CELL_W 折算。
+	var left := delta
+	while left > 1e-9 and not _path.is_empty():
 		var target: Vector2i = _path[0]
 		var goal := Vector2(target.x * BattleStage.CELL_W, target.y * BattleStage.CELL_H)
 		var nd := dir
-		if position.x != goal.x:
-			nd = Dir.EAST if goal.x > position.x else Dir.WEST
-			var m := minf(step, absf(goal.x - position.x))
-			position.x = move_toward(position.x, goal.x, step)
-			step -= m
-		elif position.y != goal.y:
-			nd = Dir.SOUTH if goal.y > position.y else Dir.NORTH
-			var m := minf(step, absf(goal.y - position.y))
-			position.y = move_toward(position.y, goal.y, step)
-			step -= m
+		if _true_pos.x != goal.x:
+			nd = Dir.EAST if goal.x > _true_pos.x else Dir.WEST
+			var m := minf(_speed * left, absf(goal.x - _true_pos.x))
+			_true_pos.x = move_toward(_true_pos.x, goal.x, m)
+			left -= m / _speed
+		elif _true_pos.y != goal.y:
+			nd = Dir.SOUTH if goal.y > _true_pos.y else Dir.NORTH
+			var vy := _speed * float(BattleStage.CELL_H) / float(BattleStage.CELL_W)
+			var m := minf(vy * left, absf(goal.y - _true_pos.y))
+			_true_pos.y = move_toward(_true_pos.y, goal.y, m)
+			left -= m / vy
 		if nd != dir or act != Act.MOVE:
-			play_act(Act.MOVE, nd)
-		if position == goal:
+			# 起步后第一帧是行走帧 1; 转弯 (同一段路中途换方向) 帧号接着走不重来
+			_play_act(Act.MOVE, nd, 1 if act != Act.MOVE else maxi(anim.frame - anim.start_frame, 0))
+		if _true_pos == goal:
+			position = goal
+			_seg_from = goal
 			cx = target.x
 			cy = target.y
 			_path.pop_front()
 			if _path.is_empty():
-				play_act(Act.STAND, dir)
-				move_finished.emit()
+				if _has_group(3):   # 收步: 到格后播, 播完才发 move_finished
+					_begin_phase(Phase.END, Act.MOVE_END, dir)
+					anim.delay_start(delta - left)   # 子动画本帧还要按整帧 delta 推进, 到格之前走掉的那部分不算收步的
+				else:
+					play_act(Act.STAND, dir)
+					move_finished.emit()
+		else:
+			position = _stepped(goal)
+
+
+## 走路中的显示位置: 一格分 WALK_STEPS 步, 每个行走帧到来时跳一步 (原版实测: 横向每帧 +10、竖向每帧 +8 原版像素, 不是匀速滑动);
+## 本格第 k 帧的位置 = 本格起点 + k/WALK_STEPS 格, 最后一帧正好到格
+func _stepped(goal: Vector2) -> Vector2:
+	var off := _true_pos - _seg_from
+	var span := goal - _seg_from
+	var len := maxf(absf(span.x), absf(span.y))
+	if len <= 0.0:
+		return _true_pos
+	var k := mini(int(maxf(absf(off.x), absf(off.y)) / len * WALK_STEPS) + 1, WALK_STEPS)
+	return _seg_from + span * (float(k) / WALK_STEPS)
