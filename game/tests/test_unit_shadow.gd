@@ -87,3 +87,20 @@ func test_unit_gets_one_shadow_below_the_sprite_anchored_to_the_cell():
 	v._ensure_shadow(e)
 	eq(v.get_children().filter(func(n): return n is Sprite2D).size(), 0, "站立画面为空的精灵不加")
 	v.free()
+
+
+## 当前显示帧没有部件时影子也不画 (部件数为 0 整个绘制跳过); 有部件的帧恢复
+func test_shadow_hidden_on_empty_frame():
+	var u := BattleUnit.new()
+	u.info = {"name": "甲", "camp": 0, "sprite": 1}
+	u.anim = AnimPlayer.new()
+	u.add_child(u.anim)
+	var d := _data()
+	u.anim.data = d
+	u._ensure_shadow(d)
+	var sh: Sprite2D = u.get_children().filter(func(n): return n is Sprite2D)[0]
+	u.anim.frame_shown.emit(4)   # 帧 4 无部件
+	check(not sh.visible, "空帧: 影子隐藏")
+	u.anim.frame_shown.emit(3)   # 帧 3 有人物部件
+	check(sh.visible, "有部件的帧: 影子显示")
+	u.free()

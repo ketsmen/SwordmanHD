@@ -14,7 +14,7 @@
  "settings.font.label": "字體",
  "settings.font.desc": "界面與對白字體。",
  "settings.face_style.label": "頭像風格",
- "settings.face_style.desc": "對話頭像的畫風。港漫風格需要另裝 mod 文件夾裡的 face_hk.pck。",
+ "settings.face_style.desc": "對話頭像的畫風。頭像包 (如港漫 face_hk.pck) 放進 mod 文件夾後在這裡選, 可以裝多個。",
  "settings.face_style.opt.classic": "經典",
  "settings.win.desc": "窗口大小, 自動按屏幕選; 全屏時無效。",
  "settings.win.opt.0": "自動",

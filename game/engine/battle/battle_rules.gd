@@ -115,7 +115,7 @@ func commit_move(u: BattleUnit, to: Vector2i) -> Array:
 
 ## 移动前的状态, 取消行动菜单时恢复 (撤销移动)
 func move_snapshot(u: BattleUnit) -> Dictionary:
-	return {"pos": u.st.pos(), "left": u.st.move_left, "reserve": u.st.burst_reserve, "moved": u.st.moved}
+	return {"pos": u.st.pos(), "left": u.st.move_left, "reserve": u.st.burst_reserve, "moved": u.st.moved, "dir": u.dir}
 
 
 func move_restore(u: BattleUnit, s: Dictionary) -> void:
@@ -123,6 +123,7 @@ func move_restore(u: BattleUnit, s: Dictionary) -> void:
 	u.st.burst_reserve = s["reserve"]
 	u.st.moved = s["moved"]
 	u.set_cell(s["pos"].x, s["pos"].y)
+	u.dir = int(s.get("dir", u.dir))   # 撤销移动后朝向也回到移动前 (原版实测 R4: 东 -> 南)
 
 
 func can_start_action(u: BattleUnit) -> bool:

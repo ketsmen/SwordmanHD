@@ -751,3 +751,56 @@ func test_minimal_follow_shift():
 	eq(S.minimal_follow_shift(Vector2(99, 150), rpos, rend, cell), Vector2(-30, 0), "出左缘一点: 推 -1 格")
 	eq(S.minimal_follow_shift(Vector2(200, 301), rpos, rend, cell), Vector2(0, 24), "出下缘: 推 1 格")
 	eq(S.minimal_follow_shift(Vector2(50, 40), rpos, rend, cell), Vector2(-60, -72), "左上同时出界: 两个轴各推整数格")
+
+
+## 悬停亮度呼吸 (原版实测 R2): p 从 16 起每 3 tick (一步) ±2 到 26 再回, 周期 10 步 = 30 tick, 倍数 p/16 = 1.0 ~ 1.625
+func test_hover_breath_gain_sequence():
+	var got := []
+	for i in 11:
+		got.append(int(round(BattleInput.breath_gain(i) * 16)))
+	eq(got, [16, 18, 20, 22, 24, 26, 24, 22, 20, 18, 16], "p: 16..26..16")
+
+
+## 光标态确认: 我方未行动单位 -> 选中; 敌方 / 友军 / 已行动 -> 直接弹大属性窗 (玩家反馈: 原版点中直接弹属性, 不多一步选中); 空地 -> 系统菜单
+class _FakeInput:
+	extends RefCounted
+	var cur := Vector2i.ZERO
+	var unit
+	var can_start := true
+	var log: Array = []
+	var rules := self
+	func unit_at(_c): return unit
+	func can_start_action(_u) -> bool: return can_start
+	func select_unit(_u) -> void: log.append("select")
+	func open_detail(_u) -> void: log.append("detail")
+	func hover_clear() -> void: log.append("clear")
+	func push(_s) -> void: log.append("push")
+
+
+func test_cursor_confirm_routes_non_own_units_to_detail():
+	var st := CursorState.new()
+	var fi := _FakeInput.new()
+	st.c = fi
+	var own := BattleUnit.new()
+	own.info = {"name": "甲", "camp": 0, "sprite": 1}
+	var foe := BattleUnit.new()
+	foe.info = {"name": "乙", "camp": 1, "sprite": 1}
+	foe.st.side = 1   # 敌方 (controllable = 阵营 0 且非友军 NPC)
+	fi.unit = own
+	st.confirm()
+	eq(fi.log, ["select"], "我方未行动 -> 选中")
+	fi.log.clear()
+	fi.can_start = false
+	st.confirm()
+	eq(fi.log, ["clear", "detail"], "我方已行动 -> 直接属性窗")
+	fi.log.clear()
+	fi.unit = foe
+	fi.can_start = true
+	st.confirm()
+	eq(fi.log, ["clear", "detail"], "敌方 -> 直接属性窗")
+	fi.log.clear()
+	fi.unit = null
+	st.confirm()
+	eq(fi.log, ["push"], "空地 -> 系统菜单")
+	own.free()
+	foe.free()

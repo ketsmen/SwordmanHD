@@ -135,3 +135,27 @@ func test_push_steps_return_to_origin():
 		for st in BattleCloseup.PUSH_STEPS[ab]:
 			sum += st
 		eq(sum, Vector2.ZERO, "位移三步累计回原位 ab=%s" % ab)
+
+
+## hit=2 / hit=3 被打方位移 (Windows 直读实测 U3): hit=2 瞬移 (6,4) 左负右正且累加, hit=3 ±(3,2) 交替, hit=4 不动
+func test_hit2_hit3_displacement():
+	var cu := BattleCloseup.new(null)
+	var m := Node2D.new()
+	cu._hit_disp(m, 2, true, false)
+	eq(m.position, Vector2(-6, -4), "hit=2 左侧 (-6,-4)")
+	cu._hit_disp(m, 2, true, false)
+	eq(m.position, Vector2(-12, -8), "连续 hit=2 累加")
+	var m2 := Node2D.new()
+	cu._hit_disp(m2, 2, false, false)
+	eq(m2.position, Vector2(6, 4), "hit=2 右侧取反")
+	var m3 := Node2D.new()
+	cu._hit_disp(m3, 3, true, false)
+	eq(m3.position, Vector2(-3, -2), "hit=3 左先负")
+	cu._hit_disp(m3, 3, true, false)
+	eq(m3.position, Vector2(3, 2), "hit=3 交替")
+	var m4 := Node2D.new()
+	cu._hit_disp(m4, 4, true, false)
+	eq(m4.position, Vector2.ZERO, "hit=4 无位移")
+	for n in [m, m2, m3, m4]:
+		n.free()
+	cu.free()

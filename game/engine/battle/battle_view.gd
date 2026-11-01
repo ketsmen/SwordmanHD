@@ -11,14 +11,27 @@ const U = preload("res://engine/rules/unit_state.gd")
 ## 范围格: 纯色方块, 画在人物下面, 近乎不透明且不闪 (原版实测: 地板 (60,33,16) 叠加后 (153,33,198);
 ## 差异_第1幕_移动范围颜色.png 两次纹理拟合地板透出率都约 13%, 叠加色 ≈(167,33,225) @ 0.87)。
 ## 我方移动范围品红紫 (蓝紫色 #8a3cf0 是叠加后的观感); 敌方移动范围、攻击/施法范围红色 (重制版 GameBattleUnitMovement)
-const RANGE_MOVE := Color8(167, 33, 225)
-const RANGE_ENEMY := Color(1.0, 0.0, 0.0)
-const RANGE_ATTACK := Color(1.0, 0.0, 0.0)
-const RANGE_ALPHA := 0.87
+## 范围覆盖层 (原版 Windows 直读后缓冲实测, 数据见实测记录文档): 加色着色, 结果 = 底 + 色 * 权重, 权重 = (p8>>1)/8;
+## 逐格 30x24 无边框, 画在地形之上、人物和光标之下。三种样式:
+##   RANGE_MOVE / RANGE_ATTACK: 蓝紫 0x401F, p8 三角波脉动 (1..16, 14..0, 每 2 tick 一步, 周期 31 步 = 62 tick); 选中我方单位后的移动范围、攻击 / 技能 / 道具目标范围
+##   RANGE_HOVER: 蓝紫 0x401F 固定 p8 = 10 (光标悬停我方单位的预览, 不脉动)
+##   RANGE_ENEMY: 红 0x7C00 固定 p8 = 10 (悬停敌方 / 友军单位); 原版没有「攻击范围红色」
+## (旧实现是不透明 alpha 0.87 色块、不闪, 来自一张脉动中段的截图, 已推翻)
+const RANGE_MOVE := 0
+const RANGE_ATTACK := 0
+const RANGE_HOVER := 1
+const RANGE_ENEMY := 2
+const RANGE_PURPLE := Color(16.0 / 31.0, 0.0, 1.0)   # RGB555 0x401F
+const RANGE_RED := Color(1.0, 0.0, 0.0)             # 0x7C00
+const RANGE_FIXED_P8 := 10
+const PULSE_STEPS := 31
+const PULSE_STEP_SECS := 0.08   # 2 tick
 
 var bs
 var ui: BattleUi
 var _range_node: Node2D
+var _range_style := -1
+var _range_t := 0.0
 
 
 func _init(scene, battle_ui: BattleUi) -> void:
@@ -29,25 +42,56 @@ func _init(scene, battle_ui: BattleUi) -> void:
 func _ready() -> void:
 	_range_node = Node2D.new()
 	_range_node.z_index = -2  # 在人物和光标下面
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD   # 加色: 地形纹理完整透出
+	_range_node.material = add
 	bs.units_node.add_child(_range_node)
 
 
 # ---------------- 范围 ----------------
 
-func show_range(cells: Array, tint: Color) -> void:
+## 脉动序列: 第 step 步 (0..30) 的 p8: 1..16, 14..0 (到 16 转向落到 14, 到 0 转向落到 1)
+static func pulse_p8(step: int) -> int:
+	var k := posmod(step, PULSE_STEPS)
+	return k + 1 if k < 16 else 30 - k
+
+
+## 颜色权重: 原版权重表 T[k] 的 k = p8>>1, 每档 1/8
+static func range_weight(p8: int) -> float:
+	return float(maxi(p8, 0) >> 1) / 8.0
+
+
+func show_range(cells: Array, style: int = RANGE_MOVE) -> void:
 	clear_range()
 	var cell := Vector2(BattleStage.CELL_W, BattleStage.CELL_H)
 	for c in cells:
 		var r := ColorRect.new()
 		r.position = Vector2(c) * cell
 		r.size = cell
-		r.color = Color(tint, 1.0)
+		r.color = Color.WHITE
 		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		r.use_parent_material = true
 		_range_node.add_child(r)
-	_range_node.modulate.a = RANGE_ALPHA  # 原版不闪, 旧实现的 0.25~0.5 呼吸动画删掉
+	_range_style = style
+	_range_t = 0.0
+	_apply_range()
+
+
+func _apply_range() -> void:
+	var col := RANGE_RED if _range_style == RANGE_ENEMY else RANGE_PURPLE
+	var p8 := pulse_p8(int(_range_t / PULSE_STEP_SECS)) if _range_style == RANGE_MOVE else RANGE_FIXED_P8
+	var w := range_weight(p8)
+	_range_node.modulate = Color(col.r * w, col.g * w, col.b * w, 1.0)
+
+
+func _process(delta: float) -> void:
+	if _range_style == RANGE_MOVE and _range_node.get_child_count() > 0:
+		_range_t += delta
+		_apply_range()
 
 
 func clear_range() -> void:
+	_range_style = -1
 	for c in _range_node.get_children():
 		_range_node.remove_child(c)
 		c.queue_free()
@@ -80,15 +124,16 @@ func screen_row(c: Vector2i) -> int:
 
 ## 光标停在单位上: 显示信息条左右两块 (原版 onCursorMoveOver, 2.1 / §5-20); u 为空则隐藏。
 ## 触摸界面 (手机) 固定放顶端, 给底部的虚拟键让位 (重制版 GameBattleUserRightUI.cs:42 移动端 top = true)
-func show_info(u: BattleUnit, at: Vector2i) -> void:
+## detail = false: 只显示左块 (人名 / 体术 / 移动, 144x31): 光标悬停时 (原版 Windows 实测 R2: 悬停出的是屏幕边上 144x31 的窗); 选中单位后右块 (攻 / 防 / 等级 / 经验) 才淡入
+func show_info(u: BattleUnit, at: Vector2i, detail := true) -> void:
 	if u == null:
 		ui.info.hide_bar()
 		return
-	ui.info.show_unit(unit_info(u), UiInfoBar.top_for_row(screen_row(at)) or InputRouter.touch_mode, true)
+	ui.info.show_unit(unit_info(u), UiInfoBar.top_for_row(screen_row(at)) or InputRouter.touch_mode, detail)
 
 
-func hide_info() -> void:
-	ui.info.hide_bar()
+func hide_info(animate := false) -> void:
+	ui.info.hide_bar(animate)
 
 
 ## UiInfoBar 的单位数据
@@ -105,9 +150,9 @@ static func unit_info(u: BattleUnit) -> Dictionary:
 func shade(u: BattleUnit, can_start: bool) -> void:
 	var grey: bool = (u.acted and u.acted_fx) or (u.controllable and not u.acted and not can_start)
 	u.modulate = UiLayout.color("map.unit.acted_grey") if grey else Color.WHITE
-	if grey:
-		u.anim.playing = false
-	elif u.alive and u.shown:
+	if grey and not (u.acted and u.acted_fx):
+		u.anim.playing = false   # 不能行动 (麻痹 / 冰結) 的我方单位: 沿用停动画; 已行动的单位原版照常播站立 (实测 R3)
+	elif u.alive and u.shown and not (grey and u.anim.playing):
 		u.play_act(BattleUnit.Act.STAND, u.dir)
 
 

@@ -1,57 +1,46 @@
 # SPDX-License-Identifier: GPL-3.0-only
 extends "res://tests/test_base.gd"
-## 场景音乐通道 (SceneMusic): 放过场视频会 stop_all, 之后剧本「暂停 → 继续」要让被停掉的战斗曲接着放
-## (第 0 关开场: 战斗曲先放, 视频停掉所有音乐, 暂停通道 0, 载入别的曲子, 最后继续通道 0; 以前继续只取消暂停标志, 战斗曲永远没声音)。
+## 场景音乐通道的暂停 / 继续 / 淡入 (原版 0x2D / 0x2E / 0x2C 的 arg: 0 = 硬暂停 / 立即继续, 1 = 25/127 <-> 满音量 2.08 秒线性渐变; 静态观察 S0)。
 
 
-func _wav() -> AudioStreamWAV:
-	var s := AudioStreamWAV.new()
-	s.format = AudioStreamWAV.FORMAT_16_BITS
-	s.mix_rate = 22050
-	var b := PackedByteArray()
-	b.resize(22050 * 2 * 5)   # 5 秒静音
-	s.data = b
-	return s
-
-
-func _channel(m: SceneMusic, host: Node, ch: int) -> AudioStreamPlayer:
+func _make() -> Array:
+	var host := Node.new()
+	(Engine.get_main_loop() as SceneTree).root.add_child(host)
+	var m := SceneMusic.new(host)
 	var p := AudioStreamPlayer.new()
-	p.bus = "Music"
+	p.stream = AudioStreamGenerator.new()
 	host.add_child(p)
-	p.stream = _wav()
-	m._players[ch] = p
-	return p
+	p.play()
+	m._players[0] = p
+	return [host, m, p]
 
 
-func test_resume_after_stop_all_continues_playing():
-	var host := Node.new()
-	(Engine.get_main_loop() as SceneTree).root.add_child(host)
-	var m := SceneMusic.new(host)
-	var p := _channel(m, host, 0)
-	m.start(0)
-	check(p.playing, "通道 0 开始播放")
-	m.stop_all()
-	check(not p.playing, "放视频: 全部停掉")
-	m.pause(0, true)
-	m.pause(0, false)
-	check(p.playing, "暂停 → 继续后接着放 (以前只取消暂停标志, 没声音)")
-	m.release()
-	host.free()
+func test_hard_pause_and_resume_are_immediate():
+	var t := _make()
+	var m: SceneMusic = t[1]
+	var p: AudioStreamPlayer = t[2]
+	m.pause(0, true, 0)
+	check(p.stream_paused, "arg=0 硬暂停立即生效")
+	m.pause(0, false, 0)
+	check(not p.stream_paused, "arg=0 立即继续")
+	check(is_equal_approx(p.volume_db, 0.0), "继续是全音量")
+	t[0].free()
 
 
-func test_resume_does_not_start_never_played_or_closed_channels():
-	var host := Node.new()
-	(Engine.get_main_loop() as SceneTree).root.add_child(host)
-	var m := SceneMusic.new(host)
-	var p := _channel(m, host, 0)
-	m.pause(0, true)
-	m.pause(0, false)
-	check(not p.playing, "载入了没开始播的通道, 继续不会自己响 (原版: 载入不播放)")
-	var q := _channel(m, host, 1)
-	m.start(1)
-	m.stop_all()
-	m.close(1)
-	m.pause(1, false)
-	check(not q.playing, "已关闭的通道继续不响")
-	m.release()
-	host.free()
+func test_fade_pause_keeps_playing_until_the_fade_ends():
+	var t := _make()
+	var m: SceneMusic = t[1]
+	var p: AudioStreamPlayer = t[2]
+	m.pause(0, true, 1)
+	check(not p.stream_paused, "arg=1 淡出期间还在播, 淡出完才真暂停")
+	check(p.has_meta("fade_tween"), "起了淡出渐变")
+	p.stream_paused = true   # 假装淡出完了
+	m.pause(0, false, 1)
+	check(not p.stream_paused, "继续")
+	check(is_equal_approx(p.volume_db, linear_to_db(SceneMusic.FADE_LOW)), "arg=1 继续从 25/127 起淡入")
+	t[0].free()
+
+
+func test_fade_constants_match_original_steps():
+	eq(SceneMusic.FADE_SECS, 26 * 2 * 0.04, "26 步 x 2 tick x 0.04 秒")
+	check(is_equal_approx(SceneMusic.FADE_LOW, 25.0 / 127.0), "低音量 25/127")

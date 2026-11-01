@@ -39,7 +39,7 @@ static func _sound_frames() -> Array:
 
 func exit() -> void:
 	if is_instance_valid(menu):
-		menu.queue_free()
+		c.ui.fade_free(menu)
 
 
 func on_action(a: UiAction) -> void:

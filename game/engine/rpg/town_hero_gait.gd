@@ -19,6 +19,7 @@ const EPS := 1e-6               # 累加 0.04 的浮点误差
 ##   按住的人在第一格后多停一小会儿 (门槛 - 一格用时) 再连走, 之后每格都已超过门槛, 不再受限。
 const HOLD_GATE := 0.25
 
+var smooth := false             # 位置匀速滑动 (WalkStyle.SMOOTH); false = 随行走帧分段跳 (原版)
 var n := 4                      # 行走帧数 (动作组 1 的帧数)
 var position := Vector2.ZERO    # 当前该摆的位置 (advance 后读)
 var carry := 0.0                # 上一格超出的时间, 带进「接着走」的下一格, 逐格节拍不随帧率累积误差
@@ -94,7 +95,7 @@ func _apply() -> void:
 	while _frame < k:
 		_frame += 1
 		_queue.append(_frame)
-	position = _from.lerp(_to, fraction_at(tick, n))
+	position = _from.lerp(_to, clampf(_t / (STEP_TICKS * TICK), 0.0, 1.0) if smooth else fraction_at(tick, n))
 
 
 ## 取走还没显示的行走帧序 (按顺序逐个显示)

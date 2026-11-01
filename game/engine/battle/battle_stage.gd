@@ -102,6 +102,32 @@ func bg_image(l: Dictionary) -> String:
 	return String(i) if i != null else "%s/%s.png" % [dir, String(l["name"]).get_basename()]
 
 
+## 开场就一直显示的远景图层 (原版第 4 幕悬崖外的云海 map04-1: Windows 原版实测地图以外画的是这张云海, 随镜头 1/4 速度视差滚动, 复刻原先从不加载它所以悬崖外是黑的):
+## 远景图 (尺寸参数不是 10x8) 所在的图层如果既不是主图层 (1)、没有物件、也从来没有被任何事件的「加载图层」(0x23) 指令加载过, 就是与主场景一起常驻的背景;
+## 被事件加载的 (第 0 幕云海 map00-3、第 23 幕 map23-2 等) 仍由事件决定何时出现
+func auto_bg_layers() -> Array:
+	var by_event := {}
+	for ev in events:
+		for op in ev:
+			if int(op["type"]) == 0x23:
+				var d: PackedByteArray = op["data"]
+				by_event[d.decode_s16(0) if d.size() >= 2 else 0] = true
+	var has_objs := {}
+	for o in layers1:
+		has_objs[int(o["id"])] = true
+	var main_ids := {}
+	for l in layers0:
+		if int(l["u4"]) == 10 and int(l["u5"]) == 8:
+			main_ids[int(l["id"])] = true
+	var out: Array = []
+	for l in layers0:
+		var id := int(l["id"])
+		if id == 1 or main_ids.has(id) or has_objs.has(id) or by_event.has(id) or id in out:
+			continue
+		out.append(id)
+	return out
+
+
 ## 事件动画号 -> 动画目录 (内容里没有该号时按原版命名 Eanm_NN, 动画不存在时 AnimPlayer 不显示)
 func event_anim(file: int) -> String:
 	return event_anims.get(file, ThemeAssets.f("event_anim", [dir, file]))

@@ -100,7 +100,9 @@ func _overlay(parent: Node, c: Color) -> ColorRect:
 
 func _start() -> void:
 	show_layer(1)
-	play_music(0, st.music)
+	for id in st.auto_bg_layers():   # 常驻的远景图层 (第 4 幕悬崖外的云海等), 没有事件会去加载它
+		show_layer(id)
+	music.play(0, st.music, 1)   # 原版进场: 载入战斗曲后紧接着 fade=1 开播 (淡入 2.08 秒, 静态观察 S0); 开场事件第 0 步常把它硬暂停
 	for i in st.man.size():
 		var p: Dictionary = st.xy[i] if i < st.xy.size() else {"x": 0, "y": 0}
 		var u := BattleUnit.create(i, st.man[i], int(p["x"]), int(p["y"]), ctl.rules.ctx)
@@ -226,6 +228,9 @@ func restore(d: Dictionary) -> void:
 		unshow_layer(id)
 	for id in d["layers"]:
 		show_layer(int(id))
+	for id in st.auto_bg_layers():   # 常驻远景 (第 4 幕云海等): 旧存档 / 原版战阵档的图层表里没有它, 读档后也要补上
+		if not layer_list.has(id):
+			show_layer(id)
 	for k in d["objs1"]:
 		var j := int(k)
 		var o: Dictionary = d["objs1"][k]
@@ -893,8 +898,8 @@ func close_music(ch: int) -> void:
 	music.close(ch)
 
 
-func pause_music(ch: int, paused: bool) -> void:
-	music.pause(ch, paused)
+func pause_music(ch: int, paused: bool, arg := 0) -> void:
+	music.pause(ch, paused, arg)
 
 
 func _exit_tree() -> void:

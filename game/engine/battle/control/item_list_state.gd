@@ -57,7 +57,7 @@ func _refresh() -> void:
 func exit() -> void:
 	_close_preview()
 	if is_instance_valid(list):
-		list.queue_free()
+		c.ui.fade_free(list)
 
 
 func on_action(a: UiAction) -> void:

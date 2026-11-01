@@ -148,7 +148,7 @@ func _parse_value(a: String) -> void:
 		"--lang=": cli_overrides["lang"] = v   # 临时指定语言 hans|hant
 		"--show-hidden=": cli_overrides["show_hidden"] = int(v)   # 临时开关隐藏宝箱显示 0|1
 		"--coord=": cli_overrides["coord"] = int(v)   # 临时开关格子坐标 0|1
-		"--face-style=": cli_overrides["face_style"] = v   # 临时指定头像风格 classic|hk (hk 需要 mod/face_hk.pck, 或 TDJ_FACE_HK 指到目录)
+		"--face-style=": cli_overrides["face_style"] = v   # 临时指定头像风格 classic|<头像包内名> (如 face_hk, 需要装了该包; 旧值 hk 等同 face_hk; 见 FacePacks)
 		"--packs=": packs = v
 		"--bundled=": bundled = v
 		"--content=": content_main = v

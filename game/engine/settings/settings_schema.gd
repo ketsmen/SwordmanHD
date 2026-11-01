@@ -11,10 +11,11 @@ extends RefCounted
 ##
 ## kind: volume 0~10 整数 (左右 ±1, 到头停住) / choice 在 options 间循环 / action 没有值, 确认键打开子界面 (不进设定文件) /
 ##   live 值不在设定里、直接读写运行中的东西 (回放速度, 见 live_value / set_live, 不进设定文件)。
-## needs: desktop = 只在电脑上列 (手机没有窗口大小可选); guide = 内容包带攻略才列; replaying = 回放中才列; idle_replay = 没在回放时才列; face_hk = 装了港漫头像 mod 才列。
+## needs: desktop = 只在电脑上列 (手机没有窗口大小可选); guide = 内容包带攻略才列; replaying = 回放中才列; idle_replay = 没在回放时才列; face_pack = 装了头像包 (mod 里带 Face/ 的包, 见 FacePacks) 才列。
 ## 非行的设定键: pad_map (手柄覆盖项 {动作名: 键号}, 稀疏, 由 PadMap.sanitize 校验); key_map (键盘覆盖项 {动作名: 键值}, 稀疏, 由 KeyMap.sanitize 校验)。
 ## options: [{v: 存储值}], 显示文字 t 取自文案表 (UiStrings, 内容包 text/ui.json): 行名 settings.<key>.label、行说明 settings.<key>.desc (面板下方, 选中项)、
-##   选项文字 settings.<key>.opt.<v>; options_of 返回的选项带 t。options_from "fonts" 的选项 (t/d) 与缺省值来自字体清单 (UiFonts)。
+##   选项文字 settings.<key>.opt.<v>; options_of 返回的选项带 t。options_from "fonts" 的选项 (t/d) 与缺省值来自字体清单 (UiFonts);
+##   "face_styles" = 经典 + 已装的头像包 (FacePacks; 存储值 auto = 第一个头像包, 不单列, 显示成它实际指的那项)。
 
 const ROWS := [
 	# 语言: 简体 / 繁体 (内容包 locale/hant 叠加层, 切换后进入下个画面生效; 设计 docs/设计_繁简切换.md)
@@ -24,9 +25,9 @@ const ROWS := [
 	# 游戏速度 (复刻新增): 整个游戏的节奏 1.0~5.0 倍, 1.0~2.0 每 0.1 一档、2.0 以上每 0.5 一档; 值是十分之一倍的整数 (10 = 原速), 实现见 engine/core/game_speed.gd
 	{"key": "game_speed", "kind": "choice", "def": 10,
 		"options": [{"v": 10}, {"v": 11}, {"v": 12}, {"v": 13}, {"v": 14}, {"v": 15}, {"v": 16}, {"v": 17}, {"v": 18}, {"v": 19}, {"v": 20}, {"v": 25}, {"v": 30}, {"v": 35}, {"v": 40}, {"v": 45}, {"v": 50}]},
-	# 头像风格: 经典 (hd4x 里的 GenV3 放大) / 港漫 (可选 mod mod/face_hk.pck, 没有这个包不列这一行; 缺省港漫, 没装包时 Assets 自动回退经典)
-	{"key": "face_style", "kind": "choice", "def": "hk", "needs": "face_hk",
-		"options": [{"v": "classic"}, {"v": "hk"}]},
+	# 头像风格: 经典 (hd4x 里的 GenV3 放大) + 每个已装的头像包 (mod 里带 Face/ 的包, 数量不限); 一个头像包都没装不列这一行;
+	#   缺省 auto = 第一个头像包 (装了包就生效), 没装包时 Assets 自动用经典
+	{"key": "face_style", "kind": "choice", "def": "auto", "needs": "face_pack", "options_from": "face_styles"},
 	# 声音 (2026-10-29 设定菜单按用户给的顺序重排): 音乐 / 音效收进二级菜单, 主菜单只留这一行
 	{"key": "sound", "kind": "action"},
 	{"key": "music", "kind": "volume", "def": 10, "group": "sound"},
@@ -119,13 +120,13 @@ static func all_shown_rows() -> Array:
 static func shown_rows(group := "") -> Array:
 	var has_guide := GuideBook.available(GameContext.current().content)
 	var replaying := PlayLog.replaying()
-	var has_face_hk: bool = Assets.face_alt_available()
-	return ROWS.filter(func(r): return String(r.get("group", "")) == group and not r.get("hidden", false) and _need_ok(String(r.get("needs", "")), has_guide, replaying, has_face_hk))
+	var has_face_pack := FacePacks.available()
+	return ROWS.filter(func(r): return String(r.get("group", "")) == group and not r.get("hidden", false) and _need_ok(String(r.get("needs", "")), has_guide, replaying, has_face_pack))
 
 
-static func _need_ok(need: String, has_guide: bool, replaying: bool, has_face_hk := false) -> bool:
+static func _need_ok(need: String, has_guide: bool, replaying: bool, has_face_pack := false) -> bool:
 	match need:
-		"face_hk": return has_face_hk
+		"face_pack": return has_face_pack
 		"guide": return has_guide
 		"replaying": return replaying
 		"idle_replay": return not replaying
@@ -149,9 +150,21 @@ static func row(key: String) -> Dictionary:
 static func options_of(r: Dictionary) -> Array:
 	if r.get("options_from") == "fonts":
 		return UiFonts.options()
+	if r.get("options_from") == "face_styles":
+		return _face_style_options()
 	var out: Array = []
 	for o in r.get("options", []):
 		out.append(o.merged({"t": UiStrings.t("settings.%s.opt.%s" % [r["key"], str(o["v"])])}))
+	return out
+
+
+## 头像风格的选项: 经典 + 已装头像包; 包名 = 文案表 settings.face_style.opt.<包 id> (官方包有), 否则包自带的 info.json, 再否则包 id
+static func _face_style_options() -> Array:
+	var out: Array = [{"v": FacePacks.CLASSIC, "t": UiStrings.t("settings.face_style.opt.classic")}]
+	for id in FacePacks.ids():
+		var key := "settings.face_style.opt." + String(id)
+		var t := UiStrings.t(key) if UiStrings.has(key) else FacePacks.title_of(String(id))
+		out.append({"v": id, "t": t if t != "" else String(id)})
 	return out
 
 
@@ -217,6 +230,9 @@ static func clean_value(key: String, v, preset = null):
 		return null
 	if r["kind"] == "volume":
 		return clampi(int(v), 0, 10) if (v is int or v is float) else null
+	if r.get("options_from") == "face_styles":   # 旧值 hk -> face_hk; 包没装 (或被删了) 的取缺省
+		var s := FacePacks.normalize(v)
+		return s if s != "" else null
 	for o in (UiFonts.options(true) if r.get("options_from") == "fonts" else options_of(r)):   # 字体: 按清单全部校验 (限定语言的字体在别的语言下也保留已存的选择)
 		if _same(o["v"], v):
 			return o["v"]
@@ -325,6 +341,8 @@ static func text_of(key: String, v) -> String:
 		return PlayLog.speed_text(float(v))
 	if r.get("kind") == "volume":
 		return str(int(v))
+	if r.get("options_from") == "face_styles":
+		v = FacePacks.resolve(str(v))   # auto 显示成它实际指的那项
 	for o in options_of(r):
 		if _same(o["v"], v):
 			return o["t"]
@@ -343,6 +361,8 @@ static func step(key: String, v, d: int):
 	var opts: Array = options_of(r)
 	if opts.is_empty():
 		return v
+	if r.get("options_from") == "face_styles":
+		v = FacePacks.resolve(str(v))
 	var i := 0
 	for j in opts.size():
 		if _same(opts[j]["v"], v):

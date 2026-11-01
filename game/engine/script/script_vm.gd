@@ -151,15 +151,18 @@ func op_music_start(_t: int, d: PackedByteArray) -> void:
 
 
 func op_music_close(_t: int, d: PackedByteArray) -> void:
+	_log("通道 %d 关闭" % _s(d, 0))
 	ctx.close_music(_s(d, 0))
 
 
 func op_music_pause(_t: int, d: PackedByteArray) -> void:
-	ctx.pause_music(_s(d, 0), true)
+	_log("通道 %d 暂停 参数=%s" % [_s(d, 0), d.hex_encode()])
+	ctx.pause_music(_s(d, 0), true, _s(d, 2))
 
 
 func op_music_resume(_t: int, d: PackedByteArray) -> void:
-	ctx.pause_music(_s(d, 0), false)
+	_log("通道 %d 继续 参数=%s" % [_s(d, 0), d.hex_encode()])
+	ctx.pause_music(_s(d, 0), false, _s(d, 2))
 
 
 func op_get_item(_t: int, d: PackedByteArray) -> void:

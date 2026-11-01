@@ -4,7 +4,7 @@ extends RefCounted
 ## 战场单位脚下的影子。原版 (Win10 原生逐帧截图实测, S1): 每个单位脚下一个黑色半透明椭圆,
 ## 精灵 SAF 的行走 / 站立帧里没有 (只有 man055 带 type 1 部件, 它是在标准影子之上再叠一层), 是画单位时另外画的。
 ## 形状固定: 宽 32、高 14 原版像素, 相对格子 (30x24) 左上: x ∈ [-1, 31)、y ∈ [12, 26), 中心 (15, 19);
-## 位置**跟格子不跟精灵** (96 个精灵实测与身体包围盒无关, 同一精灵各站立帧影子不动), 走路时跟逻辑位置。黑色, alpha ≈ 0.55。
+## 位置**跟格子不跟精灵** (96 个精灵实测与身体包围盒无关, 同一精灵各站立帧影子不动), 走路时跟逻辑位置。黑色, alpha ≈ 0.55; 边缘软渐变约 2.4 原版像素 (smoothstep)。
 ## 站立位置那一帧没有可见部件的精灵 (163 头 / 165 黑龙) 没有影子。
 
 const W := 32   # 原版像素
@@ -25,13 +25,14 @@ static func texture() -> ImageTexture:
 		var w := W * SUPERSAMPLE
 		var h := H * SUPERSAMPLE
 		var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
-		var edge := 1.0 / (H / 2.0)   # 过渡带 ~1 原版像素 (归一化到半高)
+		var edge := 2.4 / (H / 2.0)   # 过渡带 ~2.4 原版像素 (归一化到半高): 原版阴影贴图边缘分 0.62 / 0.88 / 1.0 几档渐变, 软边
 		for y in h:
 			for x in w:
 				var dx := absf(x + 0.5 - w / 2.0) / (w / 2.0)
 				var dy := absf(y + 0.5 - h / 2.0) / (h / 2.0)
 				var d := pow(pow(dx, EXPONENT) + pow(dy, EXPONENT), 1.0 / EXPONENT)   # 1 = 椭圆边
-				img.set_pixel(x, y, Color(0, 0, 0, clampf((1.0 - d) / edge + 0.5, 0.0, 1.0)))
+				var t := clampf((1.0 - d) / edge + 0.5, 0.0, 1.0)
+				img.set_pixel(x, y, Color(0, 0, 0, t * t * (3.0 - 2.0 * t)))   # smoothstep: 边缘平滑渐变到 0, 中心保持满
 		_tex = ImageTexture.create_from_image(img)
 	return _tex
 

@@ -767,11 +767,11 @@
   "map.unit.acted_grey": {
    "type": "param",
    "color": [
-    0.55,
-    0.55,
-    0.55
+    0.75,
+    0.75,
+    0.75
    ],
-   "status": "unknown",
+   "status": "verified",
    "code": "BattleView.shade",
    "migrated": true
   },
@@ -2193,12 +2193,14 @@
     160,
     100
    ],
-   "status": "unknown",
+   "status": "verified",
    "code": "engine/battle/battle_closeup.gd open/close",
-   "scale": 2,
-   "alpha": 0.1,
-   "sec": 0.5,
-   "migrated": true
+   "scale": 1.175,
+   "alpha": 0.0,
+   "sec": 0.28,
+   "migrated": true,
+   "lead": 0.12,
+   "settle": 0.08
   },
   "closeup.floor": {
    "type": "anim",

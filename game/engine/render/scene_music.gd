@@ -4,7 +4,9 @@ extends RefCounted
 ## 场景里的音乐通道 (战场/城镇剧情共用): 通道号 -> AudioStreamPlayer。
 ## 原版语义: 载入只把曲子装进通道不播放, 播放另有指令 (fade=1 淡入), 暂停/继续/关闭按通道。
 
-const FADE_IN_SECS := 1.0  # 淡入时长原版未测
+## 淡入 / 淡出 (静态观察 动画对照_静态观察.md S0, 战场音乐通道): 音量 25/127 <-> 127/127 线性渐变, 每 2 tick 一步共 26 步 = 52 tick = 2.08 秒 (tick 率按 25Hz, 置信度中)
+const FADE_SECS := 2.08
+const FADE_LOW := 25.0 / 127.0   # 淡出到这个音量才真暂停; 淡入从这个音量起
 
 var _host: Node
 var _players := {}
@@ -42,18 +44,30 @@ func start(ch: int, fade := 0) -> void:
 		return
 	p.stream_paused = false
 	if fade == 1:
-		p.volume_db = -40.0
+		p.volume_db = linear_to_db(FADE_LOW)
 		p.play()
-		_host.create_tween().tween_property(p, "volume_db", 0.0, FADE_IN_SECS)
+		_fade_to(p, 1.0)
 	else:
 		p.volume_db = 0
 		p.play()
 
 
-## 载入并立即播放 (场景开场的背景音乐)
-func play(ch: int, num: int) -> void:
+## 载入并立即播放 (场景开场的背景音乐); fade = 1: 淡入 (原版战场进场: 载入后紧接着 fade=1 开播)
+func play(ch: int, num: int, fade := 0) -> void:
 	load_track(ch, num)
-	start(ch)
+	start(ch, fade)
+
+
+## 把通道音量线性渐变到 target (0..1); 新的渐变作废旧的
+func _fade_to(p: AudioStreamPlayer, target: float, then_pause := false) -> void:
+	var old: Variant = p.get_meta("fade_tween") if p.has_meta("fade_tween") else null
+	if old is Tween and (old as Tween).is_valid():
+		(old as Tween).kill()
+	var tw := _host.create_tween()
+	p.set_meta("fade_tween", tw)
+	tw.tween_method(func(v: float): p.volume_db = linear_to_db(maxf(v, 0.0001)), db_to_linear(p.volume_db), target, FADE_SECS)
+	if then_pause:
+		tw.tween_callback(func(): p.stream_paused = true)
 
 
 func close(ch: int) -> void:
@@ -64,12 +78,23 @@ func close(ch: int) -> void:
 		p.stream = null
 
 
-## 暂停 / 继续。继续时如果这个通道是被 stop_all 停掉的 (放过场视频时), 从停下的位置接着放, 不然只取消暂停标志、什么也不响
-func pause(ch: int, paused: bool) -> void:
+## 暂停 / 继续。arg (剧本指令的第二个参数): 0 = 硬暂停 / 立即继续 (全音量), 1 = 暂停时线性淡出到 25/127 再停、继续时从 25/127 淡入 (原版 0x2D / 0x2E, 静态观察 S0)。
+## 继续时如果这个通道是被 stop_all 停掉的 (放过场视频时), 从停下的位置接着放, 不然只取消暂停标志、什么也不响
+func pause(ch: int, paused: bool, arg := 0) -> void:
 	var p: AudioStreamPlayer = _players.get(ch)
 	if p == null:
 		return
+	if paused and arg == 1 and p.playing and not p.stream_paused:
+		_fade_to(p, FADE_LOW, true)   # 淡出完才真暂停
+		return
+	var old: Variant = p.get_meta("fade_tween") if p.has_meta("fade_tween") else null
+	if old is Tween and (old as Tween).is_valid():
+		(old as Tween).kill()
+	if not paused:
+		p.volume_db = linear_to_db(FADE_LOW) if arg == 1 else 0.0
 	p.stream_paused = paused
+	if not paused and arg == 1:
+		_fade_to(p, 1.0)
 	if not paused and p.stream != null and not p.playing and p.has_meta("resume_pos"):
 		p.play(float(p.get_meta("resume_pos")))
 		p.remove_meta("resume_pos")

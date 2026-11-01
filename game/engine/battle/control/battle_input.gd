@@ -206,7 +206,84 @@ func set_cursor(c: Vector2i, pointer := false) -> void:
 func show_cursor(with_info := true) -> void:
 	view.show_cursor(cur)
 	if with_info:
-		view.show_info(rules.unit_at(cur), cur)
+		if _free_cursor():
+			_hover_begin()
+		else:
+			view.show_info(rules.unit_at(cur), cur)
+
+
+## ---- 悬停 (原版 Windows 直读后缓冲实测 R2 + 静态观察 T2): 自由光标落到单位上 ----
+## 单位本体立刻开始亮度呼吸 (p 16 -> 26 -> 16, 每 3 tick ±2, 周期 30 tick, 亮度倍数 p/16); 停留满 19 tick 后人物简介窗 (信息条) 与移动范围同一刻出现
+## (我方蓝紫固定 p8=10, 敌方 / 友军红固定); 光标一换格立刻清除。取消选中回到光标后, 停留计数还在累加, 约 6 tick 后预览又出现 (R1-5)。
+const HOVER_TICKS := 19
+const HOVER_RESUME_TICKS := 6
+const BREATH_STEP_SECS := 0.12   # 3 tick
+var _hover_t := 0.0
+var _hover_shown := false
+var _breath_unit: BattleUnit
+
+
+## 光标在自由状态 (无状态栈, 或栈顶是自由光标)
+func _free_cursor() -> bool:
+	return stack.is_empty() or top() is CursorState
+
+
+func _hover_begin(after_cancel := false) -> void:
+	_hover_end()
+	_hover_t = float(HOVER_TICKS - HOVER_RESUME_TICKS) * 0.04 if after_cancel else 0.0
+
+
+## 立刻清掉悬停预览 (简介窗 / 范围 / 呼吸), 比如要弹大属性窗时
+func hover_clear() -> void:
+	_hover_end()
+	_hover_t = 0.0
+
+
+## 取消选中回到自由光标: 停留计数没清, 剩 6 tick 预览又出现
+func hover_resume() -> void:
+	_hover_begin(true)
+
+
+## 结束悬停: clear = 同时清掉简介窗和预览范围 (光标换格 / 移开); 进入别的状态时不清 (它们自己管范围和信息条)
+func _hover_end(clear := true) -> void:
+	if _hover_shown:
+		if clear:
+			view.clear_range()
+			view.hide_info(true)   # 移开时淡出
+		_hover_shown = false
+	if _breath_unit != null and is_instance_valid(_breath_unit):
+		_breath_unit.anim.modulate = Color.WHITE
+	_breath_unit = null
+
+
+## 亮度倍数: 第 step 步 (每步 3 tick): 16, 18, ..., 26, 24, ..., 18, 16 ... (周期 10 步 = 30 tick) / 16
+static func breath_gain(step: int) -> float:
+	var k := posmod(step, 10)
+	var p := 16 + 2 * k if k <= 5 else 16 + 2 * (10 - k)
+	return float(p) / 16.0
+
+
+func _process(delta: float) -> void:
+	if not active or busy or not _free_cursor():
+		if _hover_shown or _breath_unit != null:
+			_hover_end(false)
+		return
+	var u: BattleUnit = rules.unit_at(cur)
+	if u == null:
+		_hover_end()
+		_hover_t = 0.0
+		return
+	if _breath_unit != u:
+		_hover_end()
+		_breath_unit = u
+	_hover_t += delta
+	var g := breath_gain(int(_hover_t / BREATH_STEP_SECS))
+	u.anim.modulate = Color(g, g, g, 1.0)
+	if not _hover_shown and _hover_t >= float(HOVER_TICKS) * 0.04:
+		_hover_shown = true
+		view.show_info(u, cur, false)   # 悬停只出左块 (人名框) 淡入
+		var cells: Array = rules.move_range_full(u).keys() if not (u.controllable and rules.can_start_action(u)) else rules.move_range(u).keys()
+		view.show_range(cells, BattleView.RANGE_HOVER if u.st.side == 0 else BattleView.RANGE_ENEMY)
 
 
 ## 取消键: 光标跳到下一个未行动的我方单位 (从 last_unit 往后找, 到尾回到头; 原版 nextUser/firstUser)
@@ -241,9 +318,10 @@ func select_unit(u: BattleUnit) -> void:
 		view.show_range(reach.keys(), BattleView.RANGE_MOVE)
 	else:
 		reach = rules.move_range_full(u)
-		view.show_range(reach.keys(), BattleView.RANGE_ENEMY if u.st.side == 1 else BattleView.RANGE_MOVE)
+		view.show_range(reach.keys(), BattleView.RANGE_HOVER if u.st.side == 0 else BattleView.RANGE_ENEMY)   # 我方已行动单位蓝紫固定, 敌方 / 友军红固定 (原版悬停预览样式)
 	push(UnitSelectState.new(own))
 	show_cursor()
+	view.show_info(u, Vector2i(u.cx, u.cy), true)   # 选中后右块 (攻 / 防 / 等级 / 经验) 也淡入
 
 
 ## 沿路径走到 to, 然后打开行动菜单 (移动过: 不能爆發)
@@ -251,6 +329,7 @@ func move_selected(to: Vector2i) -> void:
 	busy = true
 	view.clear_range()
 	view.hide_info()
+	view.hide_cursor()   # 原版: 确认目的地起范围清除、光标隐藏, 走完才弹行动菜单 (静态观察 T3; 画面实测 R4 待核, 与实测不符就回退)
 	_path = rules.commit_move(sel, to)
 	if not _path.is_empty():
 		sel.walk(_path, BattleStage.UNIT_WALK_SPEED)
@@ -263,10 +342,13 @@ func move_selected(to: Vector2i) -> void:
 func undo_move() -> void:
 	rules.move_restore(sel, _snap)
 	_path = []
-	sel.play_act(BattleUnit.Act.STAND, sel.dir)
+	var u := sel
+	u.play_act(BattleUnit.Act.STAND, u.dir)
 	view.clear_range()
-	sel = null
 	reset_to_cursor()
+	# 原版实测 R4: 撤销移动后单位瞬移回原格、朝向复原, 回到「已选中、移动范围 (脉动) 重新出现」的状态, 光标回原格 (不是自由光标)
+	set_cursor(Vector2i(u.cx, u.cy))
+	select_unit(u)
 
 
 ## 装备/丢弃之后: 原版不消耗行动, 回到选中状态重新显示 (剩余移动力的) 移动范围, 之后仍可移动、出手;

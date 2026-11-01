@@ -92,7 +92,9 @@ static func misc_dir(u: BattleUnit) -> String:
 
 ## 命中帧 hit=1 时被打方整体位移 (原版 cfigthe .. 读, Windows 直读剧场对象位移变量确认): 每 tick 一步、共 3 步, 累计后回原位;
 ## 普通 / 会心 / 连击 (NNNa) 步长 (-12,-8) (+9,+6) (+3,+2), 未命中 / 格挡 (NNNab) (-9,-6) (+6,+4) (+3,+2); 左侧单位按此, 右侧单位取反 (被推离画面中心)。
-## hit=2 / 3 的位移 (静态读码: 瞬移 ±(6,4) / 交替 ±(3,2)) 没有实测, 暂不做。
+## hit=2: 瞬移 (6,4), 左负右正, 保持约 3.5 tick 后归零, 连续触发累加; hit=3: ±(3,2) 交替, 左先负右先正, 同样保持后归零; hit=4 没有位移
+## (Windows 直读绘制调用参数实测 U3, 数据 closeup_unk4_hitdisp.json; 左 = 敌方, 右 = 我方, 与谁攻击无关)
+const HIT_HOLD := 0.14
 const PUSH_STEPS := {false: [Vector2(-12, -8), Vector2(9, 6), Vector2(3, 2)], true: [Vector2(-9, -6), Vector2(6, 4), Vector2(3, 2)]}
 
 
@@ -107,6 +109,27 @@ func _hit_push(m, left: bool, ab: bool) -> void:
 		if id != _push_id or not is_inside_tree():
 			return
 	m.position = Vector2.ZERO
+
+
+var _alt := 0   # hit=3 的交替计数
+
+
+func _hit_disp(m, hit: int, left: bool, ab: bool) -> void:
+	var sg := -1.0 if left else 1.0
+	match hit:
+		1:
+			_hit_push(m, left, ab)
+		2, 3:
+			_push_id += 1
+			var id := _push_id
+			if hit == 2:
+				m.position += Vector2(6, 4) * sg
+			else:
+				m.position = Vector2(3, 2) * sg * (1.0 if _alt % 2 == 0 else -1.0)
+				_alt += 1
+			await (Engine.get_main_loop() as SceneTree).create_timer(HIT_HOLD).timeout
+			if id == _push_id and is_instance_valid(m):
+				m.position = Vector2.ZERO
 
 
 ## 受击摆动 (原版 Win10 原生逐帧实测, 死魔鬼卒被殷剑平连击): 被命中的一方按 misc 帧 1 → 2 → 3 → 2 播一遍 (后退、再退、前冲、回摆; 部件 x 82 → 63 → 139 → 63,
@@ -144,6 +167,7 @@ static func shake_offsets(shake: int, _unk4 := 0) -> Array:
 
 
 const SHAKE_STEP := 0.08   # 每级 2 tick
+const DIGIT_LEAD := 0.12   # 回待机到伤害数字弹出 3 tick
 
 
 func _shake(shake: int, unk4: int) -> void:
@@ -216,23 +240,34 @@ func open(a: BattleUnit, t: BattleUnit, at := Vector2i(-1, -1), hide_target := f
 		_sides[side] = {"unit": u, "misc": m, "dir": md}
 		_build_info(side, u)
 		m.visible = not (hide_target and u == t)
-	visible = true
 	var z := UiLayout.el("closeup.zoom")
+	# 原版实测 (U5): 确认后先 3 tick 地图不变, 再 7 tick 地图 -> 近景交叉淡入 (开场带 1.175 倍 -> 1 倍缩放), 稳定 2 tick 后攻击动画才开始
 	_root.scale = Vector2.ONE * float(z.get("scale", 1))
 	_root.modulate.a = float(z.get("alpha", 1))
+	_black.modulate.a = float(z.get("alpha", 1))
+	visible = true
+	if float(z.get("lead", 0.0)) > 0.0:
+		visible = false
+		await create_tween().tween_interval(float(z["lead"])).finished
+		visible = true
 	var tw := create_tween().set_parallel()
 	tw.tween_property(_root, "scale", Vector2.ONE, float(z.get("sec", 0)))
 	tw.tween_property(_root, "modulate:a", 1.0, float(z.get("sec", 0)))
+	tw.tween_property(_black, "modulate:a", 1.0, float(z.get("sec", 0)))
 	await tw.finished
+	if float(z.get("settle", 0.0)) > 0.0:
+		await create_tween().tween_interval(float(z["settle"])).finished
 
 
+## 闭场: 7 tick 交叉淡出回地图, 不缩放 (原版实测 U5)
 func close() -> void:
 	var z := UiLayout.el("closeup.zoom")
 	var tw := create_tween().set_parallel()
-	tw.tween_property(_root, "scale", Vector2.ONE * float(z.get("scale", 1)), float(z.get("sec", 0)))
 	tw.tween_property(_root, "modulate:a", 0.0, float(z.get("sec", 0)))
+	tw.tween_property(_black, "modulate:a", 0.0, float(z.get("sec", 0)))
 	await tw.finished
 	visible = false
+	_black.modulate.a = 1.0
 
 
 func _side_of(u: BattleUnit) -> String:
@@ -261,8 +296,11 @@ func strike(a: BattleUnit, d: BattleUnit, results: Array, skill_anim := "", skil
 		fx.play(ThemeAssets.f("cast_flash", ["l" if _side_of(a) == "left" else "r"]), 0, -1, false)
 		await fx.finished
 		fx.queue_free()
+	var total := 0
+	for r in results:
+		total += int(r["damage"])
 	for i in results.size():
-		await _play_attack(a, d, asd, dsd, atk_dir, results[i], vampire, i == results.size() - 1, digits, ranged)
+		await _play_attack(a, d, asd, dsd, atk_dir, results[i], vampire, i == results.size() - 1, digits, ranged, total)
 		if int(dsd["panel"].shown) <= 0:
 			break  # 已击杀: 不演剩余命中 (连击第一下致死不再打空气, 2026-10-06 用户实测)
 
@@ -293,7 +331,8 @@ func cast_solo(a: BattleUnit, skill_anim: String, skill_name: String) -> void:
 
 
 ## vamp: 吸血量 (-1 没触发); 只在最后一击后演, 致死的一击也算最后一击 (打死了后面的不演, 吸血跟在致死那一击后面)
-func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary, atk_dir: String, r: Dictionary, vamp := -1, last := true, digits := true, ranged := false) -> void:
+## digit_total: 连击两遍放完后伤害数字只弹一次 (原版实测 U4: 数字和渐隐只在两遍都放完后各出一次), 数值是两遍之和; 打死的那一遍也算最后一遍
+func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary, atk_dir: String, r: Dictionary, vamp := -1, last := true, digits := true, ranged := false, digit_total := -1) -> void:
 	r = r.duplicate()
 	if gc.god and d.camp != 1:
 		r["damage"] = 0
@@ -306,11 +345,13 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 	var dmg := int(r["damage"])
 	var hp_after := maxi(0, hp_before - dmg)
 	var drain := vamp if (last or hp_after <= 0) else -1   # 本击后要演的吸血
+	var show_digits := digits and (last or hp_after <= 0)   # 连击: 数字只在最后一遍 (或打死的那一遍) 弹一次
+	var digit_value := 0 if (gc.god and d.camp != 1) else (digit_total if digit_total >= 0 else dmg)
 	if not anim_exists(atk_dir):
 		dmisc.visible = true   # 远程技能开场藏了守方, 没有攻击动画 (没有命中帧去放它出来) 就直接现身
 		panel.hit(dmg, hp_after > 0)
 		panel.set_hp(hp_after)
-		await _jump(dsd, dmg, digits)
+		await _jump(dsd, digit_value, show_digits)
 		if drain >= 0:
 			await _vampire(asd, drain)
 		return
@@ -340,8 +381,7 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 		if int(data["frames"][f]["shake"]) > 0:   # 帧头的震动字段: 命中震屏 (原版逐帧实测, 见 shake_offsets)
 			_shake(int(data["frames"][f]["shake"]), int(data["frames"][f]["unk4"]))
 		if int(data["frames"][f]["hit"]) > 0:
-			if int(data["frames"][f]["hit"]) == 1:
-				_hit_push(dmisc, _side_of(d) == "left", r["kind"] in ["miss", "guard"])
+			_hit_disp(dmisc, int(data["frames"][f]["hit"]), _side_of(d) == "left", r["kind"] in ["miss", "guard"])
 			if r["kind"] in ["miss", "guard"]:  # 闪避/格挡: 守方格挡姿势
 				dmisc.play(dsd["dir"], 0, 1)
 				if r.get("crit", false):   # 格挡 + 会心 = 白闪 (原版 kind 7 / 9 只走白闪块, 不红)
@@ -365,7 +405,7 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 	amisc.play(asd["dir"], ia.x, ia.y)
 	panel.set_hp(hp_after)
 	if hp_after <= 0:
-		await _jump(dsd, dmg, digits)
+		await _jump(dsd, digit_value, show_digits)
 		await _kill(dmisc)
 		if drain >= 0:
 			await _vampire(asd, drain)   # 先演倒下再吸血 (状态 7 死亡淡出 -> 状态 8/9, 实测: 淡出放完光环才出)
@@ -373,7 +413,7 @@ func _play_attack(a: BattleUnit, d: BattleUnit, asd: Dictionary, dsd: Dictionary
 		var idl := idle_frame(dmisc.data)
 		dmisc.play(dsd["dir"], idl.x, idl.y)
 		# 伤害数字只看结算值: 命中/会心/格挡/闪避都走这里, 闪避就是红字「0」(原版实测); 不出「閃避」之类的文字
-		await _jump(dsd, dmg, digits)
+		await _jump(dsd, digit_value, show_digits)
 		if drain >= 0:
 			await _vampire(asd, drain)
 
@@ -475,10 +515,10 @@ func _flash_red(_fl := {}) -> void:
 	_color_flash(4, 2)
 
 
+## 致死渐隐: 数字放完后定格, 16 tick 线性淡出 (原版实测 U4: 亮度约 0.92 -> 0.05 近似线性, 没有大于 1 的过曝帧; 旧的 4 倍过曝是推测)
 func _kill(m: AnimPlayer) -> void:
 	m.playing = false
-	m.modulate = Color(4, 4, 4, 1)
-	await create_tween().tween_property(m, "modulate:a", 0.0, 0.6).finished   # 淡出 0.6 秒 (实测: 守方倒下 1.96~2.56 s)
+	await create_tween().tween_property(m, "modulate:a", 0.0, 16 * 0.04).finished
 
 
 # ---------------- 信息栏与伤害数字 ----------------
@@ -656,6 +696,7 @@ func _build_info(side: String, u: BattleUnit) -> void:
 func _jump(sd: Dictionary, dmg: int, digits := true) -> void:
 	if not digits:
 		return
+	await create_tween().tween_interval(DIGIT_LEAD).finished   # 攻击放完回待机后 3 tick 数字才弹 (原版实测 U4)
 	var left: bool = sd == _sides.get("left")
 	var n := DamageDigits.new(str(dmg), "closeup.damage.left" if left else "closeup.damage.right")
 	_ui.add_child(n)

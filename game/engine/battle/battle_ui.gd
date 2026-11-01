@@ -60,18 +60,27 @@ func icon_menu(id: String, enabled: Array, sel: int, cell: Vector2i) -> UiIconMe
 	bs.units_node.add_child(m)
 	m.setup_id(id, enabled, sel)
 	m.position = UiIconMenu.place_near(cell, bs.cam, bs.view(), m.width(), m.height())
-	if id == "actionmenu.icons":
-		_fade_in(m)
+	fade_in(m)
 	return m
 
 
-## 行动菜单淡入 (原版 Windows 实测: 收步放完后 +1 tick 起可见, +6 tick 满显, 共 6 级, 有无收步起点相同): 每 tick 加 1/6 不透明度
-func _fade_in(m: UiIconMenu) -> void:
-	m.modulate.a = 0.0
-	var tw := m.create_tween()
+## 窗口淡入 / 淡出 (原版 Windows 实测 补 2 F.2 / 补 4 V5, 全部菜单窗口通用): 打开时 6 级淡入 (触发 tick 起每 tick +1/6, 约 0.24 秒), 关闭时约 5 tick 淡出。
+## 行动菜单 (移动后 / 未移动)、技能 / 物品列表窗、图标子菜单、系统菜单都有; 原版第 5 级不透明度略回落, 这里取线性
+func fade_in(n: CanvasItem) -> void:
+	n.modulate.a = 0.0
+	var tw := n.create_tween()
 	for k in range(1, 7):
 		tw.tween_interval(0.04)
-		tw.tween_callback(func(): m.modulate.a = k / 6.0)
+		tw.tween_callback(func(): n.modulate.a = k / 6.0)
+
+
+## 淡出后释放 (关闭窗口用); 节点已经不在状态里, 淡出期间不再响应
+func fade_free(n: CanvasItem) -> void:
+	if not is_instance_valid(n):
+		return
+	var tw := n.create_tween()
+	tw.tween_property(n, "modulate:a", 0.0, 0.2)
+	tw.tween_callback(n.queue_free)
 
 
 ## 叠在 parent 之上的子菜单 (位置 = 上级菜单 + actionmenu.sub_pos, 原版)
@@ -83,6 +92,7 @@ func sub_menu(parent: UiIconMenu, id: String, enabled: Array, sel: int, frames: 
 	m.setup_id(id, enabled, sel, frames)
 	var off := UiLayout.vec_of("actionmenu.sub_pos", "pos", {"w0": parent.w0, "h": parent.height()})
 	m.position = parent.position + Vector2(int(off.x), int(off.y))  # 向零取整 (原版有符号 /4)
+	fade_in(m)
 	return m
 
 
@@ -93,6 +103,7 @@ func list_menu(lay: Dictionary, rows: Array, sel := -1) -> UiListMenu:
 	layer.add(l, ScreenLayout.Anchor.CENTER)
 	l.setup(lay, rows, sel)
 	l.open()
+	fade_in(l)
 	return l
 
 

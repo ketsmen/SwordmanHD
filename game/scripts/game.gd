@@ -84,7 +84,7 @@ func apply_settings() -> void:
 		Assets.gfx = settings["gfx"]
 		Assets.tex_mult = tex
 		Assets.clear_cache()
-	var fs := String(settings.get("face_style", "hk"))
+	var fs := String(settings.get("face_style", FacePacks.AUTO))
 	if Assets.face_style != fs:   # 头像风格: 清贴图缓存, 下一次显示头像就读新风格
 		Assets.face_style = fs
 		Assets.clear_cache()

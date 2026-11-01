@@ -14,8 +14,8 @@ func _before() -> Dictionary:
 func _resolved() -> Dictionary:
 	var out := {}
 	for r in SettingsSchema.all_shown_rows():   # 主菜单 + 全部二级菜单
-		if r.get("needs", "") == "face_hk":
-			continue   # 头像风格行只有装了港漫 mod 才列 (基线按没装 mod 录的)
+		if r.get("needs", "") == "face_pack":
+			continue   # 头像风格行只有装了头像包才列 (基线按没装 mod 录的)
 		var k: String = r["key"]
 		out["settings.%s.label" % k] = SettingsSchema.label_of(r)
 		out["settings.%s.desc" % k] = SettingsSchema.row_desc(r)

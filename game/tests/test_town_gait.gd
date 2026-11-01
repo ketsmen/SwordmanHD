@@ -170,6 +170,7 @@ func test_scene_walks_a_cell_in_thirds_and_keeps_the_last_frame_after_stopping()
 		check(true, "无 Assets, 跳过")
 		return
 	_fake_anim()
+	WalkStyle.override = 1   # 原版步进 (内置缺省是平滑)
 	var s = _scene()
 	var y0: float = s.hero.position.y
 	var base := 3 * 4 + 0 * 4   # 站立 3*4 + 朝南 (d=0) 的行走首帧
@@ -194,6 +195,7 @@ func test_scene_walks_a_cell_in_thirds_and_keeps_the_last_frame_after_stopping()
 	eq(sd2, 0, "满 3 tick 回到朝南站立")
 	s._hero_act(false, sd2)
 	check(s.hero.playing and s.hero.start_frame == 0 and s.hero.tick_override == 2, "站立动画在播, 每帧 2 tick")
+	WalkStyle.override = -1
 	_scene_free(s)
 	_unfake()
 
@@ -203,6 +205,7 @@ func test_scene_horizontal_cell_jumps_10_20_30() -> void:
 		check(true, "无 Assets, 跳过")
 		return
 	_fake_anim()
+	WalkStyle.override = 1
 	var s = _scene()
 	var x0: float = s.hero.position.x
 	s._step(BattleUnit.Dir.EAST)
@@ -211,6 +214,27 @@ func test_scene_horizontal_cell_jumps_10_20_30() -> void:
 		s._walk_tick(TownHeroGait.TICK)
 		xs.append(snappedf(s.hero.position.x - x0, 0.01))
 	eq(xs, [10.0, 10.0, 20.0, 20.0, 30.0, 30.0], "横向一格 30 像素分 10/20/30 三段跳 (原版实测 ±10 ±20)")
+	WalkStyle.override = -1
+	_scene_free(s)
+	_unfake()
+
+
+## 缺省 (WalkStyle.SMOOTH = true): 同样每格 10 tick, 位置匀速滑过, 到格 30 像素; 行走帧的节拍不变
+func test_scene_smooth_walk_slides_evenly_over_ten_ticks() -> void:
+	if not _fake_ok():
+		check(true, "无 Assets, 跳过")
+		return
+	_fake_anim()
+	WalkStyle.override = 0
+	var s = _scene()
+	var x0: float = s.hero.position.x
+	s._step(BattleUnit.Dir.EAST)
+	var xs: Array = []
+	for t in 10:
+		s._walk_tick(TownHeroGait.TICK)
+		xs.append(snappedf(s.hero.position.x - x0, 0.01))
+	WalkStyle.override = -1
+	eq(xs, [3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 24.0, 27.0, 30.0], "匀速 30 像素 / 10 tick")
 	_scene_free(s)
 	_unfake()
 

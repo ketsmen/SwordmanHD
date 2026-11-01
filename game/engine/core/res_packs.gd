@@ -12,7 +12,7 @@ extends Node
 ##     classic_movies.pck → res://classic/movies/ 原版分辨率过场 (320x200; 放了 hd_movies 就不用放)
 ##
 ##   mod/  可选 mod (叠加覆盖): 目录里所有 *.pck 按文件名顺序挂在 resource/ 之后, 同路径文件后挂的覆盖先挂的。
-##     face_hk.pck        → res://mod/face_hk/     港漫风格头像 (设定里「头像风格」选「港漫」才读; 没装则没有这一行, 见 Assets.face_style)
+##     face_hk.pck        → res://mod/face_hk/     港漫风格头像 (头像包之一: mod 里带 Face/ 的包都是头像包, 设定里「头像风格」逐个选, 见 FacePacks)
 ##     其他 mod 包 (改内容、换素材) 同样放这里; mod 自带的新素材放在 res://mod/<包名>/ 下, 要覆盖必备资源里的文件就用同一个 res:// 路径。
 ##
 ## 两个目录都可以直接放在 exe 旁, 也兼容旧的平铺摆法 (资源包直接放 exe 旁、不分目录)。

@@ -21,8 +21,7 @@ const SCALE := 4  # 布局倍数: 原版 320x200 -> 视口 1280x800 (与贴图�
 
 var root := ""          # 游戏仓库根: 含 hd4x/ data/
 var orig := ""          # 原图目录 (原图仓库)
-var face_style := ""     # 头像风格: "" / "classic" = hd4x 里的经典头像, "hk" = 可选 mod 的港漫头像 (face_alt_dir 下同名 webp, 缺哪张退回经典); 由 Game.apply_settings 设
-var face_alt_dir := ""  # 港漫头像目录 (含 Face/<目录>/tN.webp; mod/face_hk.pck 挂载后是 res://mod/face_hk, 开发版可用 TDJ_FACE_HK / tools/dev_env.json 的 face_hk 指到目录)
+var face_style := ""     # 头像风格 (值见 FacePacks): "" / "classic" = hd4x 里的经典头像, 其余 = 头像包里的同名 webp (缺哪张退回经典); 由 Game.apply_settings 设
 var hd4_dir := ""       # hd4x 目录 (默认 <root>/hd4x, 可由 TDJ_HD4X / tools/dev_env.json 指到别处)
 var gfx := "hd"         # "hd" 或 "orig"
 var _index := {}        # 小写相对路径 -> 真实相对路径 (原版文件名大小写不统一)
@@ -123,7 +122,7 @@ func _init_dirs() -> void:
 	hd4_dir = "res://hd" if DirAccess.dir_exists_absolute("res://hd") else _configured("hd4x", "TDJ_HD4X")   # hd_images / hd_movies 任何一个挂载后这个目录就在
 	if hd4_dir == "":
 		hd4_dir = root.path_join("hd4x")
-	face_alt_dir = "res://mod/face_hk" if DirAccess.dir_exists_absolute("res://mod/face_hk") else _configured("face_hk", "TDJ_FACE_HK")   # mod/face_hk.pck 挂载后这个目录就在
+	FacePacks.scan(_configured("face_hk", "TDJ_FACE_HK"))   # 头像包: mod/ 里挂载后带 Face/ 的包; 开发版没挂包时 face_hk 可用 TDJ_FACE_HK / tools/dev_env.json 指到目录
 	if max_tex <= 0:
 		max_tex = MAX_TEX_MOBILE if Platform.is_mobile() else MAX_TEX_DESKTOP
 	if tex_budget_max_mb < 0:
@@ -282,17 +281,15 @@ func _pack_file(rel: String) -> String:
 	return c.asset_file(rel) if c else ""
 
 
-## 头像风格 hk 时某张头像在 mod 包里的 webp 路径; 不是头像 / 风格不是 hk / 没有该包 / 该帧不在包里 / 原版画质时返回 "" (用经典头像)
+## 头像风格选了头像包时某张头像在包里的 webp 路径; 不是头像 / 风格是经典 / 没有该包 / 该帧不在包里 / 原版画质时返回 "" (用经典头像)
 func _face_alt_file(rel: String) -> String:
-	if face_style != "hk" or face_alt_dir == "" or gfx != "hd" or not rel.to_lower().begins_with("face/"):
+	if gfx != "hd" or not rel.to_lower().begins_with("face/"):
 		return ""
-	var f := face_alt_dir.path_join(rel.get_basename() + ".webp")
+	var dir := FacePacks.dir_of(face_style)
+	if dir == "":
+		return ""
+	var f := dir.path_join(rel.get_basename() + ".webp")
 	return f if FileAccess.file_exists(f) else ""
-
-
-## 可选的港漫 E2 头像是否可用 (设定里「头像风格」一行据此显示)
-func face_alt_available() -> bool:
-	return face_alt_dir != "" and DirAccess.dir_exists_absolute(face_alt_dir.path_join("Face"))
 
 
 ## 内容包服务 (autoload 节点 "Content"; 按节点取, 不直接引用全局名, 见 tests/test_engine_deps.gd)
@@ -433,7 +430,7 @@ func _tex_load(rel_in: String, low: bool) -> Dictionary:
 		push_error("贴图不存在: " + rel_in)
 		return {"texture": _missing_tex(), "scale": 1.0, "hd": false}
 	var alt := _face_alt_file(rel)
-	if alt != "":   # 头像风格 = 港漫: 读可选包里的同名头像 (4 倍, 与 hd4x 的头像同尺寸同对位), 缺这一张就往下走经典头像
+	if alt != "":   # 头像风格选了头像包: 读包里的同名头像 (4 倍, 与 hd4x 的头像同尺寸同对位), 缺这一张就往下走经典头像
 		if not _texs.has(alt):
 			var aimg := Image.load_from_file(alt)
 			if aimg != null:

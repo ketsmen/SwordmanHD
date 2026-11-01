@@ -379,6 +379,8 @@ func show_unit(d := Dir.SOUTH) -> void:
 	shown = true
 	visible = true
 	modulate = Color.WHITE
+	if anim != null:
+		anim.modulate = Color.WHITE   # 死亡渐隐只淡本体 (fade_out), 重新出场要还原
 	play_act(Act.STAND, d)
 
 
@@ -387,10 +389,15 @@ func hide_unit() -> void:
 	visible = false
 
 
+## 死亡渐隐: 原版 16 tick (0.64 秒, 静态观察 S5), 只淡人物本体; 脚下影子满强度保持到单位整体移除 (复刻原先整个节点 alpha 淡出, 影子一起淡)。
+## 原版是加色过曝再淡出 (权重 2.0 -> 0.125), 渲染器单次混合最高 1.0, 这里只做 16 tick 线性淡出
+const FADE_OUT_SECS := 16 * TICK
+
+
 func fade_out() -> void:
 	shown = false
 	var tw := create_tween()
-	tw.tween_property(self, "modulate:a", 0.0, 0.5)
+	tw.tween_property(anim if anim != null else self, "modulate:a", 0.0, FADE_OUT_SECS)
 	await tw.finished
 	visible = false
 
@@ -434,6 +441,10 @@ func _ensure_shadow(data: Dictionary) -> void:
 	_shadow.position = UnitShadow.CENTER   # 单位节点原点 = 格子左上
 	add_child(_shadow)
 	move_child(_shadow, 0)
+	# 原版绘制单位: 当前显示帧没有部件时整个跳过, 影子也不画 (静态观察 S6)
+	anim.frame_shown.connect(func(f: int):
+		var fr: Array = anim.data.get("frames", [])
+		_shadow.visible = f >= fr.size() or not (fr[f]["parts"] as Array).is_empty())
 
 
 func _step_dir(to: Vector2i) -> int:
@@ -475,13 +486,12 @@ func _play_act(a: int, d: int, at := 0) -> void:
 		Act.MOVE_END:
 			size = int(c[3])
 			idx = base + (move + stand + mstart) * 4 + d * size
-		Act.WIN:
-			size = win
+		Act.WIN:   # 没有胜利帧的精灵 (204 / 163 等) 固定显示帧 2 (空帧: 单位不画, 影子也不画; 原版实测 补 4 V1), 不退回站立
+			size = win if win > 0 else 1
 			idx = 2
-		Act.CAST:  # 施法姿势: 第 0~1 帧 (把施法者动作设为 0; 实测殷剑平举剑面向画面); 没有这两帧的按站立
-			if not data["frames"][0]["parts"].filter(func(p): return p["tex"] != null).is_empty():
-				size = 2
-				idx = 0
+		Act.CAST:  # 施法姿势: 第 0~1 帧 (把施法者动作设为 0; 实测殷剑平举剑面向画面); 这两帧是空帧的精灵 (204 / 231 / 236 等)
+			size = 2   # 原版照播空帧: 法术演出期间 (150~275 tick) 身体和影子都不画 (补 4 V1)
+			idx = 0
 	if size <= 0:   # 起步 / 收步 / 胜利没有这一组 (调用方有 _has_group 守着, 这里兜底), 按站立
 		size = maxi(stand, 1)
 		idx = base + d * size
@@ -490,7 +500,7 @@ func _play_act(a: int, d: int, at := 0) -> void:
 		idx += 1
 		size -= 1
 	# 起步 / 走路 / 收步每帧 2 tick, 站立每帧 3 tick, 都与帧自带的 time 无关 (原版实测 107 个战场精灵); 其余 (胜利 / 施法) 仍按帧自带的 time
-	anim.tick_override = PHASE_TICKS if a == Act.MOVE or a == Act.MOVE_START or a == Act.MOVE_END else (STAND_TICKS if a == Act.STAND else 0)
+	anim.tick_override = PHASE_TICKS if a == Act.MOVE or a == Act.MOVE_START or a == Act.MOVE_END else (STAND_TICKS if a == Act.STAND or a == Act.CAST or a == Act.WIN else 0)   # 施法 / 胜利帧也是每 3 tick 一帧 (实测 补 4 V1)
 	anim.start_at = at
 	if a == Act.STAND:   # 回站立: 从帧 1 起, 相位对到全局网格 (已「播过」的时间 = 2 / 3 / 1 tick (tick%3 = 0 / 1 / 2) + 本 tick 内已过的零头)
 		anim.start_at = 1
@@ -578,7 +588,7 @@ func _process(delta: float) -> void:
 					play_act(Act.STAND, dir)
 					move_finished.emit()
 		else:
-			position = _stepped(goal)
+			position = _true_pos if WalkStyle.smooth() else _stepped(goal)   # WalkStyle 内置开关: 平滑 / 原版步进
 
 
 ## 走路中的显示位置: 一格分 WALK_STEPS 步, 每个行走帧到来时跳一步 (原版实测: 横向每帧 +10、竖向每帧 +8 原版像素, 不是匀速滑动);

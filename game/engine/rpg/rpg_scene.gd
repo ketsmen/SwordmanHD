@@ -412,6 +412,7 @@ func _walk_tick(delta: float) -> void:
 	if goal != _seg_goal:
 		_seg_goal = goal
 		gait.begin(hero.position, goal)
+	gait.smooth = WalkStyle.smooth()   # WalkStyle 内置开关: 平滑 / 原版步进 (只改位置的画法)
 	var arrived := gait.advance(delta)
 	hero.position = gait.position
 	_show_walk_frames()
@@ -731,8 +732,8 @@ func close_music(ch: int) -> void:
 	music.close(ch)
 
 
-func pause_music(ch: int, paused: bool) -> void:
-	music.pause(ch, paused)
+func pause_music(ch: int, paused: bool, arg := 0) -> void:
+	music.pause(ch, paused, arg)
 
 
 func _exit_tree() -> void:

@@ -268,6 +268,7 @@ func test_position_jumps_with_walk_frames():
 		check(true, "无资源, 跳过")
 		return
 	_fake_anim("Sprite/test_jump/a", 0, 0, 4)
+	WalkStyle.override = 1   # 原版步进 (内置缺省是平滑)
 	for case in [[Vector2i(7, 7), Vector2(10, 0)], [Vector2i(6, 8), Vector2(0, 8)]]:
 		var u := _unit_with("Sprite/test_jump/a", Vector2i(6, 7))
 		var p0 := u.position
@@ -279,6 +280,7 @@ func test_position_jumps_with_walk_frames():
 				seen.append(u.position - p0)
 		eq(seen, [case[1], case[1] * 2, case[1] * 3], "三个行走帧各跳 1/3 格 %s" % case[0])
 		u.free()
+	WalkStyle.override = -1
 	_unfake("Sprite/test_jump/a")
 
 
@@ -326,3 +328,24 @@ func test_stand_phase_follows_global_three_tick_grid():
 		eq(u.anim.frame, base + cases[tm][2], "换帧后 tick%%3=%d" % tm)
 		u.free()
 	_unfake("Sprite/test_ph/a")
+
+
+## 缺省 (WalkStyle.SMOOTH = true): 位置匀速滑动, 不分步跳; 每格用时不变
+func test_smooth_walk_slides_evenly():
+	if not _fake_ok():
+		check(true, "无资源, 跳过")
+		return
+	_fake_anim("Sprite/test_smooth/a", 0, 0, 4)
+	WalkStyle.override = 0
+	var u := _unit_with("Sprite/test_smooth/a", Vector2i(6, 7))
+	var p0 := u.position
+	u.walk([Vector2i(7, 7)], BattleStage.UNIT_WALK_SPEED)
+	var seen := []
+	for i in 24:
+		u._process(0.01)
+		if i in [4, 9, 14]:
+			seen.append(u.position.x - p0.x)
+	WalkStyle.override = -1
+	check(absf(seen[0] - 6.25) < 0.01 and absf(seen[1] - 12.5) < 0.01 and absf(seen[2] - 18.75) < 0.01, "匀速: %s" % str(seen))
+	u.free()
+	_unfake("Sprite/test_smooth/a")
