@@ -65,6 +65,7 @@ func _fade_to(p: AudioStreamPlayer, target: float, then_pause := false) -> void:
 		(old as Tween).kill()
 	var tw := _host.create_tween()
 	p.set_meta("fade_tween", tw)
+	p.set_meta("fade_pause", then_pause)
 	tw.tween_method(func(v: float): p.volume_db = linear_to_db(maxf(v, 0.0001)), db_to_linear(p.volume_db), target, FADE_SECS)
 	if then_pause:
 		tw.tween_callback(func(): p.stream_paused = true)
@@ -100,12 +101,30 @@ func pause(ch: int, paused: bool, arg := 0) -> void:
 		p.remove_meta("resume_pos")
 
 
-## 停掉所有通道 (放过场视频等, 视频自带声音)。正在播的记下位置, 之后该通道收到「继续」会接着放 (原版开场: 先放视频, 再暂停/载入别的曲子, 最后继续战斗曲)
-func stop_all() -> void:
-	for p in _players.values():
-		if p.playing:
+## 停掉所有通道 (放过场视频等, 视频自带声音)。正在播的记下位置, 之后该通道收到「继续」会接着放 (原版开场: 先放视频, 再暂停/载入别的曲子, 最后继续战斗曲)。
+## 返回停掉时还在响的通道 (正在淡出暂停的不算: 剧本本来就要它停), 交给 resume_held 在视频放完后接着放
+func stop_all() -> Array:
+	var held := []
+	for ch in _players:
+		var p: AudioStreamPlayer = _players[ch]
+		if p.playing or (p.stream_paused and p.stream != null):   # 暂停着的通道 playing 为假, 也要记位置, 剧本之后「继续」才接得上
 			p.set_meta("resume_pos", p.get_playback_position())
+			var tw: Variant = p.get_meta("fade_tween") if p.has_meta("fade_tween") else null
+			var fading_out: bool = tw is Tween and (tw as Tween).is_running() and bool(p.get_meta("fade_pause", false))
+			if not p.stream_paused and not fading_out:
+				held.append(ch)
 		p.stop()
+	return held
+
+
+## 过场视频放完: stop_all 停掉的通道从停下的位置接着放。原版视频指令 (0x29 → → Bink) 不碰音乐通道,
+## 视频之后战斗曲照常在放 (第 30 幕蚩尤视频后剧本没有「继续」指令); 剧本要静音会自己在视频前关 / 淡出 (第 19 / 31 幕)
+func resume_held(chs: Array) -> void:
+	for ch in chs:
+		var p: AudioStreamPlayer = _players.get(ch)
+		if p != null and p.stream != null and not p.playing and p.has_meta("resume_pos"):
+			p.play(float(p.get_meta("resume_pos")))
+			p.remove_meta("resume_pos")
 
 
 ## 场景离开 / 退出时停掉并摘掉流, 否则退出时 MP3 播放对象被音频线程占着, 报 ObjectDB 泄漏

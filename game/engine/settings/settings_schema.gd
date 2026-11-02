@@ -11,8 +11,9 @@ extends RefCounted
 ##
 ## kind: volume 0~10 整数 (左右 ±1, 到头停住) / choice 在 options 间循环 / action 没有值, 确认键打开子界面 (不进设定文件) /
 ##   live 值不在设定里、直接读写运行中的东西 (回放速度, 见 live_value / set_live, 不进设定文件)。
-## needs: desktop = 只在电脑上列 (手机没有窗口大小可选); guide = 内容包带攻略才列; replaying = 回放中才列; idle_replay = 没在回放时才列; face_pack = 装了头像包 (mod 里带 Face/ 的包, 见 FacePacks) 才列。
+## needs: desktop = 只在电脑上列 (手机没有窗口大小可选); touch = 有虚拟键时才列 (手机 / 平板, 或桌面 --touch); guide = 内容包带攻略才列; replaying = 回放中才列; idle_replay = 没在回放时才列; face_pack = 装了头像包 (mod 里带 Face/ 的包, 见 FacePacks) 才列。
 ## 非行的设定键: pad_map (手柄覆盖项 {动作名: 键号}, 稀疏, 由 PadMap.sanitize 校验); key_map (键盘覆盖项 {动作名: 键值}, 稀疏, 由 KeyMap.sanitize 校验)。
+## locked: in_battle = 战斗中这一行照列 (显示当前值) 但灰显、面板里改不了 (SettingsPanel._change 拦住; 成长: 战斗开始时定, 战斗中改了不生效); 选中时下面的说明 (desc) 解释原因。
 ## options: [{v: 存储值}], 显示文字 t 取自文案表 (UiStrings, 内容包 text/ui.json): 行名 settings.<key>.label、行说明 settings.<key>.desc (面板下方, 选中项)、
 ##   选项文字 settings.<key>.opt.<v>; options_of 返回的选项带 t。options_from "fonts" 的选项 (t/d) 与缺省值来自字体清单 (UiFonts);
 ##   "face_styles" = 经典 + 已装的头像包 (FacePacks; 存储值 auto = 第一个头像包, 不单列, 显示成它实际指的那项)。
@@ -66,16 +67,29 @@ const ROWS := [
 	{"key": "pad_preset", "kind": "choice", "def": "std", "group": "controls",
 		"options": [{"v": "std"}, {"v": "swap"}]},
 	{"key": "pad_edit", "kind": "action", "group": "controls"},
-	# 战场辅助 (默认全关 = 与原版一致): 宝箱显示 (隐藏宝箱图标 + 宝箱内容提示) / 光标格坐标
-	{"key": "show_hidden", "kind": "choice", "def": 0,
+	# 触屏键样式 (样式一 / 样式二, 2026-11-03 网友反馈圆形摇杆容易斜着输入): stick = 圆形摇杆 (缺省, 原来那套) / dpad = 十字键 (手指在哪条臂就是哪个方向, 斜角里保持原方向);
+	#   只在有虚拟键的时候列 (手机 / 平板, 或桌面 --touch), 见 engine/input/touch_pad.gd
+	{"key": "touch_pad", "kind": "choice", "def": "stick", "group": "controls", "needs": "touch",
+		"options": [{"v": "stick"}, {"v": "dpad"}]},
+	# 特色功能 (复刻新增, 2026-11-02 用户指定: 把隐藏宝箱 / 成长 / 坐标 / 整理行囊收进一个二级菜单, 主菜单只留这一行; 动作行 feature 打开同一个 SettingsPanel, 只列 group = feature 的行)
+	{"key": "feature", "kind": "action"},
+	# 战场辅助 (默认全关 = 与原版一致): 宝箱显示 (隐藏宝箱图标 + 宝箱内容提示)
+	{"key": "show_hidden", "kind": "choice", "def": 0, "group": "feature",
 		"options": [{"v": 0}, {"v": 1}]},
-	{"key": "coord", "kind": "choice", "def": 0,
+	# 成长 (复刻新增): 我方升级时五项属性 / HP / MP 的随机项: random = 原版 (0..N 均匀随机), max = 恒取上限 N, min = 恒取 0 (基本成长照加);
+	#   战斗开始时定 (BattleRules.battle_start 取这个设定 -> Params.apply_growth_setting), 所以战斗中这一行照列但灰显锁定 (locked in_battle, 只能在城镇 / 营地 / 标题改, 选中时说明解释原因);
+	#   录像随战斗种子一起记, 回放按录的走 (PlayLog.battle_start)
+	{"key": "growth", "kind": "choice", "def": "random", "locked": "in_battle", "group": "feature",
+		"options": [{"v": "random"}, {"v": "max"}, {"v": "min"}]},
+	# 战场辅助: 光标格坐标
+	{"key": "coord", "kind": "choice", "def": 0, "group": "feature",
 		"options": [{"v": 0}, {"v": 1}]},
+	# 整理行囊 (原来是攻略面板里的按钮, 2026-10-25 搬到设定, 2026-11-02 收进特色功能): 公共行囊按物品编号排 (CampInventory.resort_bag); 回放中不列 (整理会改行囊, 回放时不能插手)
+	{"key": "bag_sort", "kind": "action", "needs": "idle_replay", "group": "feature"},
+	# 录像回放 (2026-11-03 用户指定收进特色功能): 没在回放时列; 回放中的「结束回放」「回放速度」仍在主菜单 (随时能停 / 调速)
+	{"key": "replay", "kind": "action", "needs": "idle_replay", "group": "feature"},
 	# 录像回放 (复刻新增): 没在回放时列「录像回放」(打开 engine/ui/replay_panel.gd); 回放中改列「结束回放」和「回放速度」
 	#   (live: 值取自运行中的回放, 左右调、立即生效, 不进设定文件)
-	# 整理行囊 (原来是攻略面板里的按钮, 2026-10-25 搬到这里): 公共行囊按物品编号排 (CampInventory.resort_bag); 回放中不列 (整理会改行囊, 回放时不能插手)
-	{"key": "bag_sort", "kind": "action", "needs": "idle_replay"},
-	{"key": "replay", "kind": "action", "needs": "idle_replay"},
 	{"key": "replay_stop", "kind": "action", "needs": "replaying"},
 	{"key": "replay_speed", "kind": "live", "needs": "replaying"},
 	# 攻略 (随时也可按 F4): 打开攻略面板 engine/ui/guide_panel.gd; needs guide = 内容包没有攻略 (guide/guide.json) 时不列
@@ -104,8 +118,8 @@ static func auto_win(usable: Vector2i) -> int:
 ## 档位行不是主菜单入口, 也不算设定项 (action 行不存盘), 所以不进 GROUPS / all_shown_rows; 档位值必须是 game_speed 的合法选项。
 const SPEED_GROUP := "speed"
 const SPEED_PRESETS := [10, 15, 20, 30, 40, 50]
-const GROUPS := ["sound", "display", "controls"]   # 二级菜单 (组名 = 主菜单入口行的键)
-const GROUP_EXTRA := {"controls": ["pad_map", "key_map"], "display": [], "sound": []}
+const GROUPS := ["sound", "display", "controls", "feature"]   # 二级菜单 (组名 = 主菜单入口行的键)
+const GROUP_EXTRA := {"controls": ["pad_map", "key_map"], "display": [], "sound": [], "feature": []}
 
 
 ## 主菜单 + 全部二级菜单里显示的行 (测试 / 猴子测试用)
@@ -114,6 +128,11 @@ static func all_shown_rows() -> Array:
 	for g in GROUPS:
 		out += shown_rows(g)
 	return out
+
+
+## 这一行现在是不是锁定 (灰显、面板里改不了): locked in_battle = 当前场景是战场。只管面板里的改动; 命令行 / 覆盖层不受限
+static func is_locked(r: Dictionary) -> bool:
+	return String(r.get("locked", "")) == "in_battle" and GameContext.current().in_battle
 
 
 ## 设定面板里显示的行 (去掉 hidden 的, 以及 needs 条件不满足的)。group: "" = 主菜单 (没有 group 的行 + 各二级菜单的入口行), 否则只列该组的行
@@ -131,6 +150,7 @@ static func _need_ok(need: String, has_guide: bool, replaying: bool, has_face_pa
 		"replaying": return replaying
 		"idle_replay": return not replaying
 		"desktop": return not Platform.is_mobile()
+		"touch": return Platform.is_mobile() or DebugArgs.current().touch
 	return true
 
 
@@ -288,22 +308,31 @@ static func set_override(gc, key: String, raw) -> bool:
 	return true
 
 
-## 「还原预设」: 两层都回缺省 (覆盖层一并清掉), 生效并存盘
+## 「还原预设」: 两层都回缺省 (覆盖层一并清掉), 生效并存盘。灰显锁定的行 (战斗中的成长) 不动: 不能在战斗里悄悄把它改回缺省
 static func reset_all(gc) -> void:
+	var kept := {}   # 锁定行: 键 -> [存盘层值, 生效值]
+	for r in ROWS:
+		if is_locked(r):
+			kept[r["key"]] = [gc.settings_saved.get(r["key"]), gc.settings.get(r["key"])]
 	gc.settings_saved = defaults()
 	gc.settings_override = {}
 	gc.settings = defaults()
+	for k in kept:
+		if kept[k][0] != null:
+			gc.settings_saved[k] = kept[k][0]
+		if kept[k][1] != null:
+			gc.settings[k] = kept[k][1]
 	gc.flow.apply_settings()
 	gc.flow.save_settings()
 
 
-## 二级菜单的「还原预设」: 只把该组的设定项 (和 GROUP_EXTRA 里的覆盖项) 恢复缺省, 不动别的
+## 二级菜单的「还原预设」: 只把该组的设定项 (和 GROUP_EXTRA 里的覆盖项) 恢复缺省, 不动别的; 灰显锁定的行同样不动
 static func reset_group(gc, group: String) -> void:
 	var d := defaults()
 	if group == SPEED_GROUP:   # 加速菜单的「还原预设」= 回原速
 		_put(gc, "game_speed", d["game_speed"])
 	for r in ROWS:
-		if String(r.get("group", "")) == group and not _valueless(r):
+		if String(r.get("group", "")) == group and not _valueless(r) and not is_locked(r):
 			_put(gc, String(r["key"]), d[r["key"]])
 	for k in GROUP_EXTRA.get(group, []):
 		_put(gc, String(k), d[k])

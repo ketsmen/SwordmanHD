@@ -32,7 +32,9 @@ var board
 
 func _init(scene) -> void:
 	bs = scene
-	ctx = Context.new(Content.params(), Rng.new(battle_seed()))
+	var start := battle_start()
+	ctx = Context.new(Content.params(), Rng.new(int(start["seed"])))
+	ctx.params.apply_growth_setting(String(start["growth"]))   # 设定「成长」: 这场战斗我方升级的随机项取值 (随机不动)
 	AI.trace_cands = gc.debug.ai_cands   # 规则层不读命令行: 对照开关由这里注入
 	# 通关录像: 读战阵存录会换种子, 回放时到那个点调这个。用方法 Callable 不用 lambda: 静态变量里的 lambda
 	# 在退出时晚于脚本释放, 会把堆写坏 (glibc "corrupted size vs. prev_size", 测试进程退出码 134)
@@ -49,11 +51,15 @@ func _init(scene) -> void:
 ## 每关的随机数种子: 显式 --seed=N 时固定 (确定性回归用);
 ## 没传则随机 (原版行为: 战阵重现再进来闪避/命中的 rolls 不同, 会话用户实测报告)
 
-static func battle_seed() -> int:
-	var s = GameContext.current().debug.rng_seed
+## 同时带上设定「成长」(随机 / 最大 / 最小), 战斗开始时定下: 设定里中途改了, 下一场战斗起生效。
+## 通关录像: 录制时记下种子和成长模式, 回放时取回当时那场的 (成长模式影响升级结果和随机数序列, 必须跟着录像走)
+static func battle_start() -> Dictionary:
+	var gc := GameContext.current()
+	var growth := String(gc.settings.get("growth", "random"))
+	var s = gc.debug.rng_seed
 	if s != null:
-		return PlayLog.seed_for_battle(int(s))   # 通关录像: 录制时记下种子, 回放时取回当时的
-	return PlayLog.seed_for_battle(int(Time.get_unix_time_from_system() * 1000) & 0x7FFFFFFF)
+		return PlayLog.battle_start(int(s), growth)
+	return PlayLog.battle_start(int(Time.get_unix_time_from_system() * 1000) & 0x7FFFFFFF, growth)
 
 
 ## 棋盘上的单位 = 在场 (存活且已现身) 的单位

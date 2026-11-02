@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 extends CanvasLayer
 ## 手机虚拟键 (只在 Android/iOS 或 --touch 时由 InputRouter 创建并显示; 桌面永不显示)。手游式操作盘 (参考王者荣耀一类的 HUD):
-##   左下: 圆形摇杆 (底盘 + 随手指的圆钮, 取主方向四向; 方向键语义同键盘, 按住连发由 InputRouter 处理)
+##   左下: 圆形摇杆 (底盘 + 随手指的圆钮, 取主方向四向; 方向键语义同键盘, 按住连发由 InputRouter 处理);
+##     设定「触屏键样式」(touch_pad) 选十字键时换成十字键 (同位置同大小): 手指在哪条臂上就是哪个方向, 落进两臂之间的斜角保持原方向 (圆形摇杆容易斜着输入, 2026-11-03 网友反馈)。
+##     两种样式对 InputRouter 一样是 STICK 键 + stick_dir, 只是判方向的规则和画法不同
 ##   右下: 两个一样大的圆键「确认 / 取消」, 确认在右下角, 取消在它左边 (拇指不用挪位置就够得到; 2026-10-25 去掉了没用的「菜单」键和「查看」键 — 查看用长按, 见 TouchGestures)
 ##   (翻页没有键: 营地列表等左右快滑翻页, 见 TouchGestures)
 ##   右上角: 小圆「隐/显」钮 (缺省隐藏整套键), 点一下隐藏/显示整套键 (隐藏后只剩它和左边的「设置」「加速」钮, 看地图不挡), 三钮一样大; 「设置」钮打开设定面板 (分辨率/简繁体/画质等);
@@ -36,6 +38,8 @@ const STICK_R := 0.155          # 摇杆底盘半径
 const KNOB_RATIO := 0.42        # 圆钮半径 / 底盘半径
 const KNOB_TRAVEL := 0.55       # 圆钮最大偏移 / 底盘半径
 const DEAD := 0.28              # 死区 / 底盘半径
+const DPAD_ARM := 0.62          # 十字键臂宽 / 底盘半径 (臂长到底盘边)
+const DPAD_DEAD := 0.2          # 十字键中心无方向区 / 底盘半径
 const BTN_R := 0.095            # 确认 / 取消两个键的半径 (一样大)
 const TOGGLE_R := 0.036         # 开关钮半径
 const GAP := 0.014              # 键间空隙
@@ -49,6 +53,10 @@ const COLORS := {
 	TOGGLE: Color(0.94, 0.88, 0.70), SETTINGS: Color(0.62, 0.84, 0.52), SPEED: Color(0.55, 0.78, 0.92),
 }
 
+## 方向键样式 (设定「触屏键样式」touch_pad 的值)
+const STYLE_STICK := "stick"
+const STYLE_DPAD := "dpad"
+
 var shown := DEFAULT_SHOWN   # 整套键是否显示; 缺省隐藏, 靠点按/手势操作, 要用点「显」
 var _pad: Node2D
 var _keys: Array = []          # [{kind, c: 视口坐标中心, r: 半径}] (_layout 算)
@@ -57,6 +65,7 @@ var _stick_c := Vector2.ZERO
 var _stick_r := 0.0
 var _knob := Vector2.ZERO      # 圆钮相对底盘中心的偏移
 var _stick_dir := UiAction.NONE
+var _style := STYLE_STICK
 var _fast := false             # 上次画加速钮时是否在加速 (变了就重画)
 var _idle := 0.0
 var _tw: Tween
@@ -80,12 +89,33 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	_apply_style()
+	var gc := GameContext.current()
+	if not gc.settings_applied.is_connected(_apply_style):
+		gc.settings_applied.connect(_apply_style)
 	_layout()
 	var vp := get_viewport()
 	if vp and not vp.size_changed.is_connected(_layout):
 		vp.size_changed.connect(_layout)
 	if not ScreenLayout.changed.is_connected(_layout):
 		ScreenLayout.changed.connect(_layout)
+
+
+## 跟随设定 touch_pad (设定面板里改了立刻换)
+func _apply_style() -> void:
+	set_style(String(GameContext.current().settings.get("touch_pad", STYLE_STICK)))
+
+
+func set_style(style: String) -> void:
+	style = STYLE_DPAD if style == STYLE_DPAD else STYLE_STICK
+	if style == _style:
+		return
+	_style = style
+	stick_release()
+
+
+func style() -> String:
+	return _style
 
 
 # ---------------------------------------------------------------- 布局
@@ -159,7 +189,10 @@ func keys() -> Array:
 func _paint(cv: Node2D) -> void:
 	var font := Assets.font(true)
 	if shown:
-		_paint_stick(cv)
+		if _style == STYLE_DPAD:
+			_paint_dpad(cv)
+		else:
+			_paint_stick(cv)
 	for k in _keys:
 		var kind: int = k["kind"]
 		if not shown and not _always(kind):
@@ -185,6 +218,33 @@ func _paint_stick(cv: Node2D) -> void:
 	var kr := r * KNOB_RATIO
 	cv.draw_circle(kc, kr, Color(0.96, 0.78, 0.42, 0.62 if down else 0.42))
 	cv.draw_arc(kc, kr, 0.0, TAU, 40, Color(GOLD, 0.95), maxf(2.0, r * 0.03), true)
+
+
+## 十字键: 横竖两条臂 (圆角) 叠成十字, 每臂一个朝外的小三角; 按着的那条臂变亮
+func _paint_dpad(cv: Node2D) -> void:
+	var c := _stick_c
+	var r := _stick_r
+	var w := r * DPAD_ARM
+	var line := maxf(2.0, r * 0.035)
+	var dirs := {UiAction.UP: Vector2.UP, UiAction.DOWN: Vector2.DOWN, UiAction.LEFT: Vector2.LEFT, UiAction.RIGHT: Vector2.RIGHT}
+	var outline := PackedVector2Array()
+	for p in [Vector2(-0.5, -1), Vector2(0.5, -1), Vector2(0.5, -0.5), Vector2(1, -0.5), Vector2(1, 0.5), Vector2(0.5, 0.5),
+			Vector2(0.5, 1), Vector2(-0.5, 1), Vector2(-0.5, 0.5), Vector2(-1, 0.5), Vector2(-1, -0.5), Vector2(-0.5, -0.5)]:
+		outline.append(c + Vector2(p.x * (w if absf(p.x) == 0.5 else r), p.y * (w if absf(p.y) == 0.5 else r)))
+	cv.draw_colored_polygon(outline, Color(DARK, 0.42))
+	for k in dirs:
+		var dv: Vector2 = dirs[k]
+		var on: bool = _stick_dir == k
+		if on:   # 按着的臂: 臂上 (中心方块以外) 铺亮色
+			var a := c + dv * w * 0.5
+			var b := c + dv * r
+			var side := Vector2(-dv.y, dv.x) * w * 0.5
+			cv.draw_colored_polygon(PackedVector2Array([a + side, b + side, b - side, a - side]), Color(GOLD, 0.6))
+		cv.draw_colored_polygon(_triangle(c + dv * r * 0.72, dv, r * 0.12), Color(GOLD if on else CREAM, 1.0 if on else 0.6))
+	var closed := outline.duplicate()
+	closed.append(outline[0])
+	cv.draw_polyline(closed, Color(GOLD, 0.75), line, true)
+	cv.draw_circle(c, w * 0.22, Color(GOLD, 0.25))
 
 
 func _paint_button(cv: Node2D, font: Font, kind: int, c: Vector2, r: float) -> void:
@@ -330,9 +390,14 @@ func hit(p: Vector2) -> int:
 	return UiAction.NONE
 
 
-## 手指在 p: 更新圆钮并返回摇杆当前方向 (UiAction.UP/DOWN/LEFT/RIGHT, 在死区内为 NONE)。取主方向, 斜着推时带一点粘滞 (换方向要多推 25%)
+## 手指在 p: 更新圆钮并返回摇杆当前方向 (UiAction.UP/DOWN/LEFT/RIGHT, 在死区内为 NONE)。取主方向, 斜着推时带一点粘滞 (换方向要多推 25%)。
+## 十字键样式见 _dpad_dir
 func stick_dir(p: Vector2) -> int:
 	var v := p - _stick_c
+	if _style == STYLE_DPAD:
+		_stick_dir = _dpad_dir(v)
+		_pad.queue_redraw()
+		return _stick_dir
 	_knob = v.limit_length(_stick_r * KNOB_TRAVEL)
 	var d := UiAction.NONE
 	if v.length() >= _stick_r * DEAD:
@@ -346,6 +411,25 @@ func stick_dir(p: Vector2) -> int:
 	_stick_dir = d
 	_pad.queue_redraw()
 	return d
+
+
+## 十字键判方向 (v = 手指相对中心): 中心小区无方向; 落在竖臂的宽度里 (|x| <= 臂宽/2) 就是上 / 下, 横臂里就是左 / 右;
+## 两臂之间的斜角 (两个都不满足) 保持当前方向 (刚按下就落在斜角时取主方向), 所以拇指斜着滑不会在两个方向间跳
+func _dpad_dir(v: Vector2) -> int:
+	var half := _stick_r * DPAD_ARM * 0.5
+	if v.length() < _stick_r * DPAD_DEAD:
+		return UiAction.NONE
+	var vert := absf(v.x) <= half
+	var horiz := absf(v.y) <= half
+	if not vert and not horiz:
+		if _stick_dir != UiAction.NONE:
+			return _stick_dir
+		horiz = absf(v.x) >= absf(v.y)
+	elif vert and horiz:   # 中心方块里 (死区外): 取主方向
+		horiz = absf(v.x) >= absf(v.y)
+	if horiz:
+		return UiAction.RIGHT if v.x > 0 else UiAction.LEFT
+	return UiAction.DOWN if v.y > 0 else UiAction.UP
 
 
 ## 手指离开摇杆: 圆钮回中

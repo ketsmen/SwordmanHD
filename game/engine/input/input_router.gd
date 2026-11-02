@@ -8,7 +8,7 @@ extends Node
 ##   模态浮层 (push(self, true)) 恒在最上层: 它打开期间别的界面入栈只会插在它下面。
 ##
 ## 键位 (原版 P/InputManager.asset, 1.1; 扩展项标 *; 键盘除方向与 Esc / F10 外都可在设定里改, 见 KeyMap):
-##   方向 ↑↓←→ / WASD (按住 0.5 秒后连发, KeyRepeat)    确认 Enter / 小键盘 Enter    空格 = SELECT (*营地/战场物品列表按住 = 装备效果预览, 其他画面同确认)
+##   方向 ↑↓←→ / WASD (按住: 第一格立即、之后每 0.2 秒, 满 1 秒后每帧; 见 KeyRepeat)    确认 Enter / 小键盘 Enter    空格 = SELECT (*营地/战场物品列表按住 = 装备效果预览, 其他画面同确认)
 ##   取消 Esc / C / Delete    查看 F    翻页 Q / E (PageUp / PageDown)    *设定 F1 (F10 同效)    *攻略 F2 (F4 同效)    *战场地图 M
 ##   *Tab = 营地/商店切换栏   (没有小键盘 +/− 选目标跳转: 2026-10-25 用户要求删掉)
 ##   *F3 跳过对白开关   *按住 Ctrl 快进对白 (攻略再按一次关闭)
@@ -63,6 +63,7 @@ var repeat := KeyRepeat.new()
 var gestures := TouchGestures.new()
 var _stack: Array = []
 var _overlays: Array = []   # _stack 里的模态浮层 (总在栈的上部)
+var _holders := {}          # 按住类动作的松开动作 (SELECT_UP / INFO_UP) -> 收下「按下」的接收方: 松开交还给它 (见 dispatch)
 var _time := 0.0
 var _buttons: Node
 ## 触摸在竖排列表上拖动 = 滚动 (↑/↓ 步进, 同滚轮语义; _drag_list_step): 0 未判定, 1 列表, 2 不是 (交给界面自己的 DRAG, 如战场卷地图, 或横向快滑翻页)
@@ -83,6 +84,9 @@ var _pad_down := {}         # 手柄上正按着的其它键 (键号, 含扳机�
 ## 两个物理键报同一个键号就没法分开绑 —— 让玩家把「按了什么键、系统报了什么」原样发回来
 const RECENT_MAX := 12
 var recent_inputs: Array = []
+## 安卓「返回」与鼠标右键去重: 右键刚发过取消 (毫秒内) 又来的「返回」不再算一次 (有的设备右键既报鼠标右键又转成「返回」)
+const BACK_AFTER_RIGHT_MS := 300
+var _right_cancel_ms := -100000
 var pad_capture := Callable()
 ## 设定面板「键盘按键设置」捕获新键时设置: 有效时键盘键 (除 Esc) 不当游戏动作, 只把可绑定键的键值交给它
 var key_capture := Callable()
@@ -192,9 +196,17 @@ func _prune() -> void:
 
 ## 把动作交给栈顶 (返回 false 的接收方让给下一层)。测试与屏幕按钮也直接调用。
 ## 指针动作 (带坐标的悬停/确认/查看) 先按接收方当前组件的命中矩形处理 (_pointer, engine/ui/ui_hit.gd)。
+## 按住类 (查看 / 空格的「按住预览、松开关闭」): 松开交还给收下按下的那个接收方, 不交给栈顶。按着时上面压了浮层 (F1 设定面板、
+## 手机上另一根手指点齿轮) 的话, 松开原先被浮层吞掉, 下层的装备属性预览就一直不关, 而预览期间别的键都不理 (玩家反馈 2026-11-02)
 func dispatch(a: UiAction) -> bool:
 	dispatched.emit(a)
 	_prune()
+	if _holders.has(a.kind):
+		var h: Object = _holders[a.kind]
+		_holders.erase(a.kind)
+		if h in _stack and h.has_method("ui_action"):
+			h.call("ui_action", a)
+			return true
 	for i in range(_stack.size() - 1, -1, -1):
 		var r: Object = _stack[i]
 		if a.has_pos() and _pointer(r, a):
@@ -202,6 +214,8 @@ func dispatch(a: UiAction) -> bool:
 		if not r.has_method("ui_action"):
 			continue
 		if r.call("ui_action", a) != false:
+			if RELEASE.has(a.kind) and not a.echo:
+				_holders[RELEASE[a.kind]] = r
 			return true
 	return false
 
@@ -317,8 +331,22 @@ func set_touch_mode(on: bool) -> void:
 
 # ---------------- 事件翻译 ----------------
 
+## 安卓「返回」= 取消: 系统返回键 / 返回手势, 以及外接鼠标的右键 —— Godot 安卓层不处理鼠标的 ACTION_BUTTON_PRESS (返回「没处理」),
+## 系统就把右键转成「返回」, 经 Activity 的返回分发 (GodotLib.back) 到这里成了 NOTIFICATION_WM_GO_BACK_REQUEST; 项目关了 quit_on_go_back,
+## 以前没人接, 右键 / 返回手势在手机上都没反应 (2026-11-03 玩家反馈「手机上右键不能取消」)。键盘 / 遥控器的 KEY_BACK 走按键映射 (key_map cancel), 不经这里
+func go_back() -> void:
+	_note_text("back request (system back / mouse right)")
+	if Time.get_ticks_msec() - _right_cancel_ms < BACK_AFTER_RIGHT_MS:
+		return
+	if replay_lock and not overlay_open():
+		return
+	dispatch(UiAction.new(UiAction.CANCEL, "back"))
+
+
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		go_back()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		repeat.clear()
 		if replay_lock:
 			return
@@ -337,15 +365,19 @@ func _process(delta: float) -> void:
 		dispatch(a)
 
 
-## 栈顶界面对当前按住方向的连发间隔 (界面可实现 repeat_interval(kind: int) -> float, 缺省 KeyRepeat.REPEAT)
+## 栈顶界面对当前按住方向的连发间隔 (界面可实现 repeat_interval(kind: int) -> float, 缺省 KeyRepeat.REPEAT);
+## 按住满 1 秒后 (KeyRepeat.fast) 用默认间隔的界面加速到每帧一格; 界面自己要求更长间隔的 (换栏 / 换人要等动画做完) 不加速
 func _repeat_interval() -> float:
 	var h := repeat.current()
 	if h == UiAction.NONE:
 		return KeyRepeat.REPEAT
+	var base := KeyRepeat.REPEAT
 	var r: Object = top()
 	if r != null and r.has_method("repeat_interval"):
-		return maxf(float(r.call("repeat_interval", h)), KeyRepeat.REPEAT)
-	return KeyRepeat.REPEAT
+		base = maxf(float(r.call("repeat_interval", h)), KeyRepeat.REPEAT)
+	if base <= KeyRepeat.REPEAT and repeat.fast():
+		return KeyRepeat.FAST_INTERVAL
+	return base
 
 
 func _input(e: InputEvent) -> void:
@@ -412,6 +444,12 @@ func _note_recent(e: InputEvent) -> void:
 		t = "key %s (keycode %d, physical %d) device %d" % [OS.get_keycode_string(e.keycode), e.keycode, e.physical_keycode, e.device]
 	elif e is InputEventJoypadButton and e.pressed:
 		t = "pad button %d (%s) device %d \"%s\"" % [e.button_index, PadMap.NAMES.get(e.button_index, "?"), e.device, Input.get_joy_name(e.device)]
+	elif e is InputEventMouseButton and e.pressed and e.device != InputEvent.DEVICE_ID_EMULATION and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
+		t = "mouse button %d device %d" % [e.button_index, e.device]   # 外接鼠标在手机上报了什么 (右键没反应时看这里有没有 2)
+	_note_text(t)
+
+
+func _note_text(t: String) -> void:
 	if t == "":
 		return
 	recent_inputs.push_front(t)
@@ -548,6 +586,7 @@ func _mouse(e: InputEvent) -> bool:
 				dispatch(UiAction.new(UiAction.CONFIRM, "mouse", b.position))
 		MOUSE_BUTTON_RIGHT:
 			if b.pressed:
+				_right_cancel_ms = Time.get_ticks_msec()
 				dispatch(UiAction.new(UiAction.CANCEL, "mouse", b.position))
 		MOUSE_BUTTON_MIDDLE:
 			dispatch(UiAction.new(UiAction.INFO if b.pressed else UiAction.INFO_UP, "mouse", b.position))

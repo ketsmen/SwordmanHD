@@ -19,6 +19,7 @@ var vm: EventVM
 var ctl: BattleController
 var world: Node2D
 var units_node: Node2D
+var _map_clip: Control         # units_node 的父节点: 裁到当前地图矩形 (layer_rect)
 var units: Array = []          # BattleUnit, 下标 = 单位编号
 var layer_list: Array = []     # 已加载的图层 id, 最后一个为当前图层
 var layer_y := 0.0
@@ -55,17 +56,7 @@ func _ready() -> void:
 	# 16:10 下 view = 320x200, 与原版逐像素相同
 	ScreenLayout.bind_node(self, ScreenLayout.Anchor.TOP_LEFT)
 	ScreenLayout.changed.connect(func(): cam = _clamp_cam(cam))
-	world = Node2D.new()
-	add_child(world)
-	units_node = Node2D.new()
-	units_node.z_index = 10
-	units_node.y_sort_enabled = true  # 人物按纵坐标排前后: 靠下的挡住靠上的 (走动中实时更新)
-	world.add_child(units_node)
-	cursor = AnimPlayer.new()
-	cursor.play_sound = false
-	cursor.visible = false
-	cursor.z_index = -1  # 选择框画在人物下面 (范围色块之上)
-	units_node.add_child(cursor)
+	_build_world()
 	var fx := CanvasLayer.new()
 	fx.layer = 40
 	add_child(fx)
@@ -80,6 +71,27 @@ func _ready() -> void:
 	ctl = BattleController.new(self)
 	add_child(ctl)
 	await _start()
+
+
+## 世界节点: 地图图层挂 world, 人物 / 光标 / 范围 / 地图上的演出与数字挂 units_node
+func _build_world() -> void:
+	world = Node2D.new()
+	add_child(world)
+	# 地图层只画在当前地图矩形里 (_map_clip 每帧对齐 layer_rect): 地图外是黑底, 从图外入场的单位 (第 0 幕殷剑平从 x=24 进来、
+	# 多幕我方从图下方进来) 不能在镜头越界露出的黑边里先露出来 (玩家反馈 2026-11-02)
+	_map_clip = Control.new()
+	_map_clip.clip_contents = true
+	_map_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	world.add_child(_map_clip)
+	units_node = Node2D.new()
+	units_node.z_index = 10
+	units_node.y_sort_enabled = true  # 人物按纵坐标排前后: 靠下的挡住靠上的 (走动中实时更新)
+	_map_clip.add_child(units_node)
+	cursor = AnimPlayer.new()
+	cursor.play_sound = false
+	cursor.visible = false
+	cursor.z_index = -1  # 选择框画在人物下面 (范围色块之上)
+	units_node.add_child(cursor)
 
 
 const COVER_MARGIN := 2048.0   # 遮罩四边多铺的像素: 任何窗口 / 全屏 / 宽屏都不露边
@@ -155,7 +167,9 @@ func _process(delta: float) -> void:
 	world.position = -_snap_px(cam + Vector2(0, layer_y))
 	if shake != Vector2.ZERO:
 		world.position += Vector2(randf_range(-shake.x, shake.x), randf_range(-shake.y, shake.y)).round()
-	units_node.position.y = layer_y
+	var lr := layer_rect()
+	_map_clip.position = lr.position
+	_map_clip.size = lr.size
 	# 远景视差: 镜头在场景里的可移动范围映射到远景图的可移动范围
 	var v := view()
 	var msize: Vector2 = layer_size.get(_current_layer(), v)
@@ -665,8 +679,13 @@ var _cursor_shown_area := -1          # 光标动画当前播的那一组
 
 
 func show_cursor(x: int, y: int) -> void:
-	_cursor_cell = Vector2i(x, y)
 	cursor.visible = true
+	place_cursor(x, y)
+
+
+## 光标移到格 (x, y), 不改显示与否 (剧情对白移光标: 只改光标格, 0x22 隐藏后对白不会让它出现)
+func place_cursor(x: int, y: int) -> void:
+	_cursor_cell = Vector2i(x, y)
 	var sp := UiLayout.sprite("map.cursor")
 	cursor.position = FxPlace.at_cell(Vector2i(x, y), String(sp.get("convention", "fx")))  # 光标与演出同一约定
 	if not cursor.playing or _cursor_shown_area != _cursor_area:
@@ -684,11 +703,17 @@ func set_cursor_area(area: int) -> void:
 		return
 	_cursor_area = a
 	if cursor.visible and _cursor_cell.x >= 0:
-		show_cursor(_cursor_cell.x, _cursor_cell.y)
+		place_cursor(_cursor_cell.x, _cursor_cell.y)
 
 
 func hide_cursor() -> void:
 	cursor.visible = false
+
+
+## 光标在原格重新显示 (隐藏期间格子保留)
+func reshow_cursor() -> void:
+	if _cursor_cell.x >= 0:
+		show_cursor(_cursor_cell.x, _cursor_cell.y)
 
 
 ## 玩家操作阶段: 我方回合、光标可操作、没有剧情/对白在跑、战斗没结束 (战场辅助显示, 如格子坐标, 只在这时出现)
@@ -703,7 +728,7 @@ func cursor_cell() -> Vector2i:
 
 
 ## 剧情对白把光标送到单位格 (实测 2026-10-05): slide=cursor 参数为 1 时光标每帧沿对角走 1 格 (+ 状态机),
-## 走完下一帧才开对白; 否则 立即逐格走完 (先横后竖), 不等。每走一步按 的边缘规则卷镜头:
+## 走完下一帧才开对白; 否则 立即逐格走完 (先横后竖), 不等。光标显示与否不变 (剧情开头 cursor_hide 后对白不出选择框)。每走一步按 的边缘规则卷镜头:
 ## 光标走到可见 10x8 格的最边一列/行 (且不是地图边) 就把镜头卷 1 格 (30x24 像素), 所以镜头停在离边 1 格处, 不是平滑平移、也不等镜头。
 func story_cursor_to(x: int, y: int, slide: bool) -> void:
 	var c := _cursor_cell if _cursor_cell.x >= 0 else Vector2i(x, y)
@@ -716,7 +741,7 @@ func story_cursor_to(x: int, y: int, slide: bool) -> void:
 			if c.y != y:
 				c.y += signi(y - c.y)
 				_cursor_edge_scroll(1, c)
-			show_cursor(c.x, c.y)
+			place_cursor(c.x, c.y)
 			await SceneGuard.wait(self, 1 / 25.0)
 		await SceneGuard.wait(self, 1 / 25.0)
 	else:
@@ -726,8 +751,24 @@ func story_cursor_to(x: int, y: int, slide: bool) -> void:
 		while c.y != y:
 			c.y += signi(y - c.y)
 			_cursor_edge_scroll(1, c)
-		show_cursor(x, y)
+		place_cursor(x, y)
 		await SceneGuard.wait(self, 1 / 25.0)
+
+
+## AI 出手前光标指向目标 (原版 AI 行动对象 状态 3~5, 攻击 / 法术 / 道具都走): 光标已在目标格就跳过;
+## 否则换成效果范围形状 并显示, 从当前格滑到目标 (与剧情 slide 同一套), 停 6 tick ([字段]=5 每 tick 减到 <0),
+## 再收回单格形状、隐藏、坐标放回行动者格 (不滑)
+func aim_cursor(target: Vector2i, area: int, actor: Vector2i) -> void:
+	if _cursor_cell == target:
+		return
+	set_cursor_area(area)
+	cursor.visible = true
+	place_cursor(_cursor_cell.x, _cursor_cell.y)
+	await story_cursor_to(target.x, target.y, true)
+	await SceneGuard.wait(self, 6 / 25.0)
+	set_cursor_area(0)
+	hide_cursor()
+	place_cursor(actor.x, actor.y)
 
 
 ## 的边缘判定 (轴 ax: 0 横 1 竖): 光标格相对镜头格的偏移为 0 (左/上缘) 或 可见格数-1 (右/下缘), 且光标不在地图边, 镜头卷 1 格
@@ -819,6 +860,13 @@ func play_animation(id: int, frame: int, end_frame: int) -> void:
 		a.show_frame(a.dir, end_frame)
 
 
+## 0x1A anim_start: 原版 (跳转 -> ->) 只把动画槽定格到第 frame 帧并发该帧的声音, 不开显示标志、不推进
+## (数据里 97 处用法的帧都没有部件, 剧情拿它当音效触发; 原先放整段动画, 后面有声帧也响, 关卡 13 / 20 / 21 共 14 处多发声)
+func anim_cue(id: int, frame: int) -> void:
+	if anims.has(id):
+		anims[id].cue_frame_sound(frame)
+
+
 func clear_animation(id: int) -> void:
 	if anims.has(id):
 		anims[id].visible = false
@@ -871,7 +919,7 @@ func show_title_card() -> void:
 
 
 func play_movie(num: int) -> void:
-	stop_all_music()
+	var held := music.stop_all()   # 视频自带声音, 放的时候静掉音乐, 放完接着放 (SceneMusic.resume_held)
 	var name := ThemeAssets.f("movie", [num])
 	var layer := CanvasLayer.new()
 	layer.layer = 90
@@ -880,6 +928,7 @@ func play_movie(num: int) -> void:
 	layer.add_child(m)
 	await m.done
 	layer.queue_free()
+	music.resume_held(held)
 
 
 func play_music(ch: int, num: int) -> void:

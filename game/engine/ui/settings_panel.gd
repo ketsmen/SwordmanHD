@@ -26,6 +26,7 @@ var _desc: UiText
 var _sel := 0            # 选中的条目 (0.._n-1 设定项, _n / _n+1 两个按钮)
 var _top := 0            # 列表第一个可见条目
 var _group := ""              # 二级菜单: 只列 SettingsSchema 里 group 相同的行 ("" = 主菜单; 「控制器」= controls); 标题 settings.<组>.title, 「还原预设」只复位本组
+var _chain_close := false   # 二级菜单里开始了回放: 二级菜单一关, 主面板也要跟着关 (整个设定菜单退出, 见 _closes_all)
 var _n := SettingsSchema.shown_rows().size()  # 设定项数; 之后是「还原预设」「完成」两个按钮行 (二级菜单在 open 里按本组重算)
 var _vis := visible_rows()
 var _sort_msg := ""          # 「整理行囊」的结果提示, 临时换掉这一行的值文字约 2 秒
@@ -134,6 +135,8 @@ func _update() -> void:
 	_scroll_to_sel()
 	var sel_c := UiLayout.color("settings.sel_color", Color8(255, 224, 116))
 	var dim_c := UiLayout.color("settings.dim_color", Color8(170, 160, 140))
+	var lock_c := UiLayout.color("settings.lock_color", Color8(105, 100, 92))        # 锁定行 (战斗中的成长): 比普通暗色更灰
+	var lock_sel_c := UiLayout.color("settings.lock_sel_color", Color8(150, 142, 126))   # 锁定行被选中: 仍比选中色暗, 看得出不能改
 	for s in _vis:
 		var e := _top + s
 		var on := e < total()
@@ -148,6 +151,8 @@ func _update() -> void:
 			_buttons[s].color = c
 		elif is_row:
 			var r: Dictionary = _srows()[e]
+			if SettingsSchema.is_locked(r):
+				c = lock_sel_c if e == _sel else lock_c
 			_rows[s].text = SettingsSchema.label_of(r)
 			_rows[s].color = c
 			_values[s].color = c
@@ -188,6 +193,8 @@ func _hq_note(want: int) -> String:
 
 func _change(d: int) -> void:
 	if _sel >= _n or _srows()[_sel]["kind"] == "action":
+		return
+	if SettingsSchema.is_locked(_srows()[_sel]):   # 灰显的行 (战斗中的成长): 左右键 / 翻页 / 点箭头都不改, 说明里写着原因
 		return
 	var k: String = _srows()[_sel]["key"]
 	if _srows()[_sel]["kind"] == "live":   # 回放速度: 直接改运行中的回放, 不进设定文件
@@ -281,8 +288,17 @@ func _sort_bag() -> void:
 		_update()
 
 
+## 子面板关掉后, 本面板要不要连着关 (整个设定菜单退出): 选定了录像 = 开始回放 (经 SceneFlow.start_replay 下一帧切场景);
+## 子面板是二级菜单且它里面开始了回放 (「录像回放」在「特色功能」里, 2026-11-03) 也要关, 否则切到回放后主面板还留在屏幕上
+func _closes_all(key: String, sub: Object, ok) -> bool:
+	if key == "replay" and ok:
+		gc.flow.start_replay.call_deferred(sub.chosen_path, sub.chosen_speed)
+		return true
+	return sub is SettingsPanel and (sub as SettingsPanel)._chain_close
+
+
 ## 动作行被确认: bag_sort = 整理行囊 (就地执行, 不开子面板); key_edit = 键盘按键设置 (engine/ui/key_map_panel.gd, 同手柄那个); pad_edit = 手柄按键设置 (模态子面板, 压在本面板之上; 每次绑定自己存盘, 取消时它自己还原覆盖项);
-## SettingsSchema.GROUPS (声音 / 显示 / 控制器) = 二级菜单 (本类的另一个实例, 只列同组的行); guide = 攻略面板 (engine/ui/guide_panel.gd, 关掉后回到设定面板); diag = 画质诊断页 (engine/ui/diag_panel.gd, 点任意处返回); about = 关于页 (engine/ui/about_panel.gd, 版本号与主页地址);
+## SettingsSchema.GROUPS (声音 / 显示 / 控制器 / 特色功能) = 二级菜单 (本类的另一个实例, 只列同组的行); guide = 攻略面板 (engine/ui/guide_panel.gd, 关掉后回到设定面板); diag = 画质诊断页 (engine/ui/diag_panel.gd, 点任意处返回); about = 关于页 (engine/ui/about_panel.gd, 版本号与主页地址);
 ## replay = 录像列表 (engine/ui/replay_panel.gd): 选定后关掉本面板, 下一帧经 SceneFlow.start_replay 切到回放;
 ## replay_stop = 结束回放 (关掉本面板, 经 SceneFlow.stop_replay 回标题)
 func _activate(key: String) -> void:
@@ -298,7 +314,7 @@ func _activate(key: String) -> void:
 		closed.emit(true)
 		return
 	var sub: Node
-	if SettingsSchema.GROUPS.has(key):   # 二级菜单: 同一个面板类, 只列该组的行 (声音 = 音乐 / 音效; 图像显示 = 窗口模式 / 分辨率 / 贴图精度 / 画质诊断; 控制器设置 = 键盘 / 手柄)
+	if SettingsSchema.GROUPS.has(key):   # 二级菜单: 同一个面板类, 只列该组的行 (声音 = 音乐 / 音效; 图像显示 = 窗口模式 / 分辨率 / 贴图精度 / 画质诊断; 控制器设置 = 键盘 / 手柄; 特色功能 = 隐藏宝箱 / 成长 / 坐标 / 整理行囊)
 		var cp := SettingsPanel.new()
 		cp._group = key
 		cp.router = router
@@ -327,8 +343,8 @@ func _activate(key: String) -> void:
 	get_parent().add_child(sub)   # 兄弟节点而不是子节点: 下面把本面板藏起来时不能连子面板一起藏
 	visible = false   # 子面板整屏盖在上面: 本面板先藏起来, 否则两层半透明底会让下层文字透上来
 	var ok = await sub.open()
-	if key == "replay" and ok:
-		gc.flow.start_replay.call_deferred(sub.chosen_path, sub.chosen_speed)
+	if _closes_all(key, sub, ok):
+		_chain_close = true   # 自己也是二级菜单时, 让上一层主面板跟着关
 		closed.emit(true)
 		return
 	visible = true

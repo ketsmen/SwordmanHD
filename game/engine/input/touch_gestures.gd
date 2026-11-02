@@ -74,7 +74,9 @@ func touch_up(index: int, pos: Vector2, now: float) -> Array:
 	var out: Array = []
 	if _multi:
 		if _down.is_empty():
-			if not _multi_moved:
+			if _long_fired:   # 长按已发 INFO (预览开着) 后又碰到第二指: 只补发松开, 不当双指取消 (否则预览收不到松开, 一直不关)
+				out.append(UiAction.new(UiAction.INFO_UP, "touch", pos))
+			elif not _multi_moved:
 				out.append(UiAction.new(UiAction.CANCEL, "touch"))
 			_reset()
 		return out

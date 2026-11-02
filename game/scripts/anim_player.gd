@@ -140,6 +140,15 @@ func _catch_up_sounds(abs_i: int) -> void:
 	_abs_prev = abs_i
 
 
+## 只响第 f 帧的声音, 不显示不推进 (剧情 anim_start: 把动画槽定格到该帧并发声, 当音效触发用); 动画数据没载入过就先载入
+func cue_frame_sound(f: int) -> void:
+	if data.is_empty():
+		if not Assets.exists(dir + "/anim.json"):
+			return
+		data = Assets.anim(dir)
+	_sound_only(f)
+
+
 func _sound_only(f: int) -> void:
 	var snd := int(data["frames"][clampi(f, 0, data["frames"].size() - 1)]["sound"])
 	if snd >= 0:

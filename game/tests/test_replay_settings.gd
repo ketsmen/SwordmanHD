@@ -4,7 +4,7 @@ extends "res://tests/test_base.gd"
 
 
 func _keys() -> Array:
-	return SettingsSchema.shown_rows().map(func(r): return r["key"])
+	return SettingsSchema.all_shown_rows().map(func(r): return r["key"])   # 主菜单 + 各二级菜单
 
 
 func _start_replay() -> String:
@@ -20,6 +20,8 @@ func _start_replay() -> String:
 func test_rows_when_idle() -> void:
 	var k := _keys()
 	check("replay" in k, "平时有「录像回放」行")
+	check(not ("replay" in SettingsSchema.shown_rows().map(func(r): return r["key"])), "主菜单不直接列, 收在「特色功能」里 (2026-11-03)")
+	check("replay" in SettingsSchema.shown_rows("feature").map(func(r): return r["key"]), "「特色功能」二级菜单里有")
 	check(not ("replay_stop" in k), "平时没有「结束回放」")
 	check(not ("replay_speed" in k), "平时没有「回放速度」")
 
@@ -30,6 +32,8 @@ func test_rows_while_replaying() -> void:
 	check(not ("replay" in k), "回放中不列「录像回放」")
 	check("replay_stop" in k, "回放中有「结束回放」")
 	check("replay_speed" in k, "回放中有「回放速度」")
+	var main := SettingsSchema.shown_rows().map(func(r): return r["key"])
+	check("replay_stop" in main and "replay_speed" in main, "回放中的两行仍在主菜单 (随时能停 / 调速)")
 	PlayLog.stop_current()
 	DirAccess.remove_absolute(p)
 
@@ -72,3 +76,22 @@ func test_panel_adjusts_live_speed_row_without_touching_settings() -> void:
 	panel.free()
 	PlayLog.stop_current()
 	DirAccess.remove_absolute(p)
+
+
+## 开始回放后整个设定菜单都要退出: 「录像回放」现在在二级菜单「特色功能」里, 二级菜单关闭时必须连主面板一起关 (否则切到回放后主面板还留在屏幕上)
+func test_starting_a_replay_from_submenu_closes_the_whole_menu() -> void:
+	var main := SettingsPanel.new()
+	var sub_panel := SettingsPanel.new()
+	sub_panel._chain_close = true
+	check(main._closes_all("feature", sub_panel, true), "二级菜单里开始了回放: 主面板跟着关")
+	var other := SettingsPanel.new()
+	check(not main._closes_all("feature", other, true), "二级菜单只是正常关闭: 主面板留着")
+	var rp := ReplayPanel.new()
+	rp.chosen_path = ""
+	check(main._closes_all("replay", rp, true), "主面板直接选了录像: 照旧关")
+	check(not main._closes_all("replay", rp, false), "取消选择: 不关")
+	main.free()
+	sub_panel.free()
+	other.free()
+	rp.free()
+

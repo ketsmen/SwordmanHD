@@ -50,6 +50,11 @@ var _menu_arrow: UiPanel
 var _menu_texts: Array = []
 var _ask: CampAsk.YesNo
 var _ask_action := ""
+## 买入数量 (复刻新增, 2026-11-03 用户要求「确认买入时加数量选择, 默认 1」): 问句下一行「数量  < n >   最大 m」,
+## ↑↓ ±1、Q/E ±10 (←→ 仍是○/✗), 点数字左边 / 右边 = 减 / 加, 滚轮同 ↑↓; 上限 = min(买得起几件, 目标栏空格)。默认 1, 直接确认 = 原版买一件
+var _qty := 1
+var _qty_max := 1
+var _buy_ptr: _BuyPointer
 var _preview: UiEquipPreview
 var _arrow_cyc := CampUi.Cycle.new(4, 4)
 var _menu_cyc := CampUi.Cycle.new(4, 2)
@@ -94,7 +99,7 @@ func _init(inventory: CampInventory) -> void:
 	_down_flag = [many, many]
 	_rebuild(0)
 	_rebuild(1)
-	_update_desc(false)
+	_update_desc()
 	_update_money()
 	UiSlide.run(mb, _money_pos, Vector2.LEFT, CampUi.SLIDE, true)
 
@@ -202,12 +207,12 @@ func _process(delta: float) -> void:
 		_menu_arrow.set_frame(_menu_arrow.anim_dir, UiLayout.frame("camp.item.menu.arrow") + _menu_cyc.phase)
 
 
-func _update_desc(typing := true) -> void:
+func _update_desc() -> void:
 	var items := _items(focus)
 	if items.is_empty():
-		desc.set_text("", false)
+		desc.set_text("")
 		return
-	desc.set_text(String(CampInventory.item(items[sel[focus]]).get("desc", "")), typing)
+	desc.set_text(String(CampInventory.item(items[sel[focus]]).get("desc", "")))
 
 
 func _row_on_page() -> int:
@@ -220,7 +225,9 @@ func _row_on_page() -> int:
 ## 三选项菜单打开时只有菜单三项, 点菜单外 = 关菜单 (同取消)。是/否框打开时交给它。装备预览中不响应。
 
 func ui_pointer_target() -> Object:
-	return _ask if _ask else self
+	if _ask:
+		return _buy_ptr if _buy_ptr else _ask
+	return self
 
 
 func ui_hits() -> Array:
@@ -284,6 +291,8 @@ func repeat_interval(kind: int) -> float:
 
 func key(k: String) -> void:
 	if _ask:
+		if _ask_action == "buy" and _qty_key(k):
+			return
 		_ask.key(k)
 		return
 	if _menu:
@@ -360,8 +369,13 @@ func _open_menu() -> void:
 	var i: int = sel[focus]
 	if inv.col(c)["kind"] == "shop":
 		# 原版实测: 买不起或目标栏满 (货品压暗) 时确认无反应, 不弹问句
-		if _can_buy(int(CampInventory.item(_items(focus)[i]).get("price", 0)), side_col[1 - focus]):
+		var price := int(CampInventory.item(_items(focus)[i]).get("price", 0))
+		if _can_buy(price, side_col[1 - focus]):
+			_qty = 1
+			_qty_max = buy_max(price, side_col[1 - focus])
 			_open_ask("buy", UiStrings.t("camp.item.ask.buy"))
+			_buy_ptr = _BuyPointer.new(_ask, desc)
+			_show_qty()
 		return
 	if not inv.movable(c, i):
 		return
@@ -432,7 +446,7 @@ func _menu_key(k: String) -> void:
 
 func _open_ask(action: String, q: String) -> void:
 	_ask_action = action
-	desc.set_text(q, false)
+	desc.set_text(q)
 	_ask = CampAsk.YesNo.make("camp.item.confirm.yesno", {"r": _row_on_page()}, _panel_pos[focus])
 	add_child(_ask)
 	_ask.done.connect(_on_ask)
@@ -441,6 +455,7 @@ func _open_ask(action: String, q: String) -> void:
 func _on_ask(yes: bool) -> void:
 	_ask.queue_free()
 	_ask = null
+	_buy_ptr = null
 	var c: int = side_col[focus]
 	var i: int = sel[focus]
 	if yes:
@@ -454,16 +469,45 @@ func _on_ask(yes: bool) -> void:
 				inv.discard(c, i)
 			"buy":
 				var other: int = side_col[1 - focus]
-				if gc.state.gold >= price and not inv.is_full(other):
+				for _n in _qty:
+					if gc.state.gold < price or inv.is_full(other):
+						break
 					gc.state.gold -= price
 					inv.col(other)["items"].append(id)
 	_after_change()
 
 
+## 买入上限: 金钱够几件 (价格 0 不限) 与目标栏 other 还剩几格取小 (商店货品可买时至少 1)
+func buy_max(price: int, other: int) -> int:
+	var cd := inv.col(other)
+	var room: int = int(cd["cap"]) - cd["items"].size()
+	var afford: int = gc.state.gold / price if price > 0 else room
+	return maxi(1, mini(afford, room))
+
+
+func _show_qty() -> void:
+	desc.set_text(UiStrings.t("camp.item.ask.buy") + "\n" + UiStrings.t("camp.item.ask.qty", [_qty, _qty_max]))
+	if _buy_ptr:   # 点按分界 = 数字的中点 (文案「数量  < %d >   最大 %d」的第一个 %d)
+		var tpl := UiStrings.t("camp.item.ask.qty")
+		_buy_ptr.split_x = desc.text_x(tpl.substr(0, maxi(0, tpl.find("%d"))), str(_qty))
+
+
+## 买入问句开着时的数量键; 不是数量键返回 false (交给是/否框)
+func _qty_key(k: String) -> bool:
+	var d: int = {"up": 1, "down": -1, "page_up": 10, "page_down": -10}.get(k, 0)
+	if d == 0:
+		return false
+	var v := clampi(_qty + d, 1, _qty_max)
+	if v != _qty:
+		_qty = v
+		_show_qty()
+	return true
+
+
 func _after_change() -> void:
 	_rebuild(0)
 	_rebuild(1)
-	_update_desc(false)
+	_update_desc()
 	_update_money()
 
 
@@ -479,3 +523,27 @@ func _open_preview() -> void:
 		return
 	_preview = UiEquipPreview.new(uid, id, focus, _row_on_page())
 	add_child(_preview)
+
+
+## 买入问句的指针组件: 是/否框的○✗ + 说明栏数量行数字左边 (减 = ↓) / 右边 (加 = ↑); 一个问句一个实例 (防误触按组件计时)
+class _BuyPointer:
+	extends RefCounted
+	var split_x := 150.0
+	var _ask: Node2D
+	var _bar: CampDescBar
+
+	func _init(ask: Node2D, bar: CampDescBar) -> void:
+		_ask = ask
+		_bar = bar
+
+	func ui_hits() -> Array:
+		var out: Array = []
+		for h in _ask.ui_hits():
+			var d: Dictionary = h.duplicate()
+			if d["node"] == null:
+				d["node"] = _ask
+			out.append(d)
+		return out + _bar.qty_hits(split_x, UiAction.DOWN, UiAction.UP)
+
+	func ui_select(i) -> void:
+		_ask.ui_select(i)

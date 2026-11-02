@@ -145,6 +145,30 @@ func test_battle_seed_recorded_and_replayed_in_order() -> void:
 	PlayLog.current = null
 
 
+## 战斗的成长模式 (设定「成长」) 编进种子高位一起录: 回放取回当时那场用的模式, 与当前设定无关; 旧录像 (种子高位 0) = 随机
+func test_battle_growth_mode_recorded_and_replayed_with_seed() -> void:
+	var x := _rec_player()
+	var p: PlayLog = x[0]
+	eq(PlayLog.battle_start(111, "max"), {"seed": 111, "growth": "max"})
+	eq(PlayLog.battle_start(222, "random"), {"seed": 222, "growth": "random"})
+	eq(PlayLog.battle_start(333, "min"), {"seed": 333, "growth": "min"})
+	var q := PlayLog.new()
+	q.mode = "replay"
+	q._seeds = JSON.parse_string(JSON.stringify(p._seeds))   # 走一遍 JSON (数字变浮点), 和读盘一致
+	q._ready()
+	eq(PlayLog.battle_start(999, "min"), {"seed": 111, "growth": "max"}, "回放取录制时的模式, 不是现在的设定")
+	eq(PlayLog.battle_start(888, "max"), {"seed": 222, "growth": "random"})
+	eq(PlayLog.battle_start(777, "random"), {"seed": 333, "growth": "min"})
+	PlayLog.current = null
+	var old := PlayLog.new()
+	old.mode = "replay"
+	old._seeds = [123456, 789]   # 旧录像: 纯种子
+	old._ready()
+	eq(PlayLog.battle_start(1, "max"), {"seed": 123456, "growth": "random"}, "旧录像按随机")
+	PlayLog.current = null
+	eq(PlayLog.battle_start(5, "max"), {"seed": 5, "growth": "max"}, "没在录 / 放: 原样返回")
+
+
 func test_stage_segment_exports_clean_path_after_load() -> void:
 	var x := _rec_player()
 	var p: PlayLog = x[0]

@@ -495,7 +495,7 @@ func _play_act(a: int, d: int, at := 0) -> void:
 	if size <= 0:   # 起步 / 收步 / 胜利没有这一组 (调用方有 _has_group 守着, 这里兜底), 按站立
 		size = maxi(stand, 1)
 		idx = base + d * size
-	anim.play_sound = a == Act.MOVE   # 只有行走帧带脚步声 (-> PlaySfx, 实测; 站立/出手近景声另走近景动画)
+	anim.play_sound = true   # 原版每次推进帧 取到有效的帧声音就 PlaySfx, 与动作无关 (对照原版: 动作只决定帧号, 声音在跳转表之后无条件取): 行走脚步 / 起步 / 收步 (出刀 收刀 提放剑匣) / 站立 (赤炼鬼等) / 胜利 都响
 	if a == Act.MOVE_START or a == Act.MOVE_END:   # 起步 / 收步: 第 0 帧不显示, 放第 1..n-1 帧 (原版实测总长 2*(n-1) tick)
 		idx += 1
 		size -= 1

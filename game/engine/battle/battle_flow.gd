@@ -254,15 +254,20 @@ func _ai_phase(filter: Callable) -> void:
 				await u.move_finished
 				bs.show_cursor(u.cx, u.cy)   # 原版光标框随单位到落点 (B4 实录)
 		var act: Dictionary = plan.action
+		var here := Vector2i(u.cx, u.cy)
 		if not act.is_empty() and u.alive:
 			match String(act.kind):
 				"attack":
 					var t: BattleUnit = rules.unit_of(act.target)
 					if t and t.alive:
+						await bs.aim_cursor(Vector2i(t.cx, t.cy), 0, here)
 						await actions.attack(u, t)
 				"skill":
-					await actions.cast(u, rules.skill(int(act.skill)), act.center)
+					var sk := rules.skill(int(act.skill))
+					await bs.aim_cursor(act.center, rules.cast_area(sk), here)
+					await actions.cast(u, sk, act.center)
 				"item":
+					await bs.aim_cursor(act.center, rules.item_area(int(act.item)), here)
 					await actions.use_item(u, int(act.item), act.center)
 				"burst":   # 聚力: 与玩家菜单「爆發」同一个规则调用
 					rules.burst(u)
@@ -270,6 +275,8 @@ func _ai_phase(filter: Callable) -> void:
 		shade(u)
 		if u.alive and not over:
 			await after_action(u, path, start)
+		if not over:
+			bs.reshow_cursor()   # 行动与地图事件完了光标重新显示 (指向过目标的话在行动者原格)
 		RegressLog.checkpoint("act", {"stage": bs.st.n, "turn": bs.turn, "unit": u.index})
 		if gc.debug.ai_trace:
 			print("AI单位完 #%d rng=%d at=%d,%d hp: %s" % [u.index, rules.ctx.rng.get_state(), u.cx, u.cy, " ".join(bs.units.filter(func(o): return o.alive).map(func(o): return "%d:%d" % [o.index, o.hp]))])

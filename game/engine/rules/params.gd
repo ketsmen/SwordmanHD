@@ -14,7 +14,7 @@ var mp_grow_const := 1              # MPmax += 1 + (Int-lv)/35 + rand%(mp_rand+1
 var grow_attr_div := 35
 var spirit_points_per_level := 2    # 高
 ## 成长随机项: "random" = rand%(N+1) 均匀 0..N (原版 + 连升统计),
-## "max" = 恒为 N (龙吟最大成长补丁, 用于对照网上数据), "min" = 恒为 0
+## "max" = 恒为 N (龙吟最大成长补丁, 用于对照网上数据), "min" = 恒为 0; 设定「成长」选最大 / 最小时战斗开始处用 apply_growth_setting 覆盖它, 选随机不动
 var growth_mode := "random"
 var hp_cap := 0                     # HPmax 上限: 0 = 不设 (原版无上限)
 var mp_cap := 0                     # 同上
@@ -236,6 +236,13 @@ static func _is_divisor(k: String) -> bool:
 ## 应用一份参数文档 (已解析的 JSON): {"format": "tdj-rules/1", "params": {...}} 或直接 {参数: 值}
 func apply_document(d: Dictionary) -> void:
 	apply(d.get("params", {}) if d.has("params") else d)
+
+
+## 设定「成长」(随机 / 最大 / 最小, 见 SettingsSchema): 最大 / 最小覆盖 growth_mode, 随机 (和未知值) 不动它 ——
+## 内容包 rules.json 自己设的 growth_mode 照旧, 没设就是原版随机
+func apply_growth_setting(mode: String) -> void:
+	if mode == "max" or mode == "min":
+		growth_mode = mode
 
 
 ## 按顺序 (基础包 → 改动包…) 依次叠加各份参数文档; 原版内容包没有文档: 默认值就是原版。

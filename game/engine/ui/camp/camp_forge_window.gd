@@ -153,7 +153,7 @@ func _process(delta: float) -> void:
 
 func _update_desc() -> void:
 	if pool.is_empty():
-		desc.set_text("", false)
+		desc.set_text("")
 		return
 	desc.set_text(String(CampInventory.item(pool[sel[stage]]["id"]).get("desc", "")))
 
@@ -221,7 +221,7 @@ func key(k: String) -> void:
 				_rebuild()
 				UiSlide.run(_right, _pos[1], Vector2.LEFT, CampUi.SLIDE, true)
 			else:
-				desc.set_text(UiStrings.t("camp.forge.ask"), false)
+				desc.set_text(UiStrings.t("camp.forge.ask"))
 				_ask = CampAsk.YesNo.make("camp.forge.yesno", {"r": sel[1] - top[1]})
 				add_child(_ask)
 				_ask.done.connect(_on_ask)
@@ -261,5 +261,5 @@ func _on_ask(yes: bool) -> void:
 	_right.visible = false
 	_refresh_pool()
 	_rebuild()
-	desc.set_text(UiStrings.t("camp.forge.done", [name]), false)
+	desc.set_text(UiStrings.t("camp.forge.done", [name]))
 	_busy = false

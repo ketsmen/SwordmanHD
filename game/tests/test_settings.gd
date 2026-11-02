@@ -46,10 +46,12 @@ func test_hidden_rows_ignore_saved_values():
 	for k in ["tex", "aspect", "gfx"]:
 		check(not keys.has(k), "面板不显示 %s" % k)
 	keys = keys.filter(func(k): return k != "face_style")   # 头像风格只有装了港漫 mod (mod/face_hk.pck) 才列, 带资源包跑测试时会出现
-	eq(keys, ["lang", "font", "game_speed", "sound", "display", "controls", "show_hidden", "coord", "bag_sort", "replay", "guide", "about"], "主菜单项与顺序 (用户 2026-10-29 指定): 语言 字体 [游戏速度, 2026-10-31 加] [头像风格] 声音 图像显示 控制器设置 隐藏宝箱设置 战场坐标显示 整理行囊 录像回放 游戏攻略 [2026-10-30 加] 关于; 没有画质项")
+	eq(keys, ["lang", "font", "game_speed", "sound", "display", "controls", "feature", "guide", "about"], "主菜单项与顺序 (用户 2026-10-29 指定, 2026-11-02 把隐藏宝箱 / 战场坐标 / 整理行囊和新加的成长收进「特色功能」): 语言 字体 [游戏速度, 2026-10-31 加] [头像风格] 声音 图像显示 控制器设置 [特色功能, 2026-11-03 起含录像回放] 游戏攻略 [2026-10-30 加] 关于; 没有画质项")
 	eq(SettingsSchema.shown_rows("sound").map(func(r): return r["key"]), ["music", "sfx"], "「声音」二级菜单: 音乐 / 音效")
 	eq(SettingsSchema.shown_rows("display").map(func(r): return r["key"]), ["fullscreen", "win", "hq", "diag"], "「显示」二级菜单: 窗口模式 / 分辨率 / 贴图精度 / 画质诊断")
 	eq(SettingsSchema.shown_rows("controls").map(func(r): return r["key"]), ["key_edit", "pad_preset", "pad_edit"], "「控制器」二级菜单: 键盘按键 / 手柄预设 / 手柄按键")
+	eq(SettingsSchema.shown_rows("feature").map(func(r): return r["key"]), ["show_hidden", "growth", "coord", "bag_sort", "replay"], "「特色功能」二级菜单 (用户 2026-11-02 / 11-03 指定): 隐藏宝箱 / 成长 / 坐标 / 整理行囊 / 录像回放")
+	eq(SettingsSchema.label_of(SettingsSchema.row("sound")), "声音设置", "主菜单「声音」改叫「声音设置」(用户 2026-11-03 指定, 与控制器设置 / 隐藏宝箱设置一致)")
 
 
 ## 窗口大小自动: 屏幕可用区域放得下的最大档 (16:10, 留标题栏), 放不下用最小档

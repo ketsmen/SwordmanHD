@@ -320,7 +320,7 @@ func test_settings_row_sorts_bag_and_guide_no_longer_does():
 	sp.router = Router.new()
 	holder.add_child(sp)
 	sp.open()   # 协程: 停在等关闭
-	check("bag_sort" in SettingsSchema.shown_rows().map(func(rr): return rr["key"]), "设定面板有「整理行囊」行")
+	check("bag_sort" in SettingsSchema.shown_rows("feature").map(func(rr): return rr["key"]), "设定面板的「特色功能」二级菜单里有「整理行囊」行 (2026-11-02 从主菜单收进去)")
 	sp._activate("bag_sort")
 	eq(gc.state.bag, [0, 220, 236], "行囊按编号排")
 	eq(sp._sort_msg, UiStrings.t("settings.bag_sort.done", [3]), "提示: 已整理 3 格")

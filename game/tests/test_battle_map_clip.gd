@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: GPL-3.0-only
+extends "res://tests/test_base.gd"
+## 战场地图层的两个剧情表现 (玩家反馈 2026-11-02, 第 0 幕):
+## ① 人物 / 光标所在的地图层裁到当前地图矩形: 殷剑平从图外 x=24 入场时不能在镜头越界露出的黑边里先露出来;
+## ② 对白移光标不改光标显示 (/ 只改光标格): 剧情开头 cursor_hide 后对白不出选择框。
+const REQUIRES := ["content"]   # 光标动画名来自布局表 (map.cursor)
+
+const BattleSceneScript = preload("res://engine/battle/battle_scene.gd")
+
+
+## 光标替身: 不读贴图 (本机可能没有原版资源; 缺动画时 AnimPlayer 会自己隐藏, 干扰显示判断); 记下每次播放时的 [显示, 起始帧]
+class StubCursor:
+	extends AnimPlayer
+	var plays: Array = []
+	func play(anim_dir: String, _start := 0, _end := -1, _looped := true) -> void:
+		dir = anim_dir
+		plays.append([visible, _start])
+		playing = false   # 不推进帧 (没有帧数据)
+
+
+## 只搭世界节点 (地图层 / 光标), 不载关卡、不跑开场流程
+class BareScene:
+	extends "res://engine/battle/battle_scene.gd"
+	func _ready() -> void:
+		_build_world()
+
+
+func _scene(map_size: Vector2, layer_id := 3) -> Node2D:
+	var bs := BareScene.new()
+	bs.st = BattleStage.new()
+	bs.st.width = int(map_size.x) / BattleStage.CELL_W
+	bs.st.height = int(map_size.y) / BattleStage.CELL_H
+	(Engine.get_main_loop() as SceneTree).root.add_child(bs)
+	bs.layer_list = [layer_id]
+	bs.layer_size[layer_id] = map_size
+	bs.layer_y = layer_id * BattleStage.LAYER_GAP
+	return bs
+
+
+func test_map_layer_clipped_to_current_map() -> void:
+	var bs := _scene(Vector2(720, 384))   # 第 0 幕 24x16 格
+	bs._process(0.0)
+	var clip: Control = bs.units_node.get_parent()
+	check(clip.clip_contents, "人物层的父节点按矩形裁剪")
+	eq(Rect2(clip.position, clip.size), bs.layer_rect(), "裁剪矩形 = 当前地图矩形")
+	var off := Vector2(24 * BattleStage.CELL_W, 10 * BattleStage.CELL_H)   # 图外入场格 (24,10)
+	check(not Rect2(Vector2.ZERO, clip.size).has_point(off + Vector2(1, 1)), "图外格在裁剪区外 (不画)")
+	eq(bs.units_node.global_position, bs.world.global_position + Vector2(0, bs.layer_y) * bs.scale, "人物层仍在图层的纵向位置 (单位坐标不变)")
+	bs.layer_size[4] = Vector2(960, 600)   # 换场景 (另一张主图): 裁剪跟着换
+	bs.layer_list.append(4)
+	bs.layer_y = 4 * BattleStage.LAYER_GAP
+	bs._process(0.0)
+	eq(Rect2(clip.position, clip.size), Rect2(Vector2(0, bs.layer_y), Vector2(960, 600)), "换图层后裁剪矩形跟随")
+	bs.free()
+
+
+func _stub_cursor(bs) -> StubCursor:
+	bs.cursor.free()
+	bs.cursor = StubCursor.new()
+	bs.units_node.add_child(bs.cursor)
+	return bs.cursor
+
+
+func test_story_cursor_keeps_hidden_cursor_hidden() -> void:
+	var bs := _scene(Vector2(720, 384))
+	_stub_cursor(bs)
+	bs.hide_cursor()
+	await bs.story_cursor_to(5, 6, false)
+	check(not bs.cursor.visible, "隐藏状态下对白移光标: 仍不显示")
+	eq(bs._cursor_cell, Vector2i(5, 6), "光标格照样移到说话单位")
+	await bs.story_cursor_to(7, 6, true)
+	check(not bs.cursor.visible, "cursor=1 滑过去也不显示")
+	eq(bs._cursor_cell, Vector2i(7, 6), "滑到说话单位")
+	bs.show_cursor(1, 1)
+	await bs.story_cursor_to(3, 2, false)
+	check(bs.cursor.visible, "原本显示的光标对白后仍显示")
+	eq(bs.cursor_cell(), Vector2i(3, 2), "停在说话单位格")
+	bs.free()
+
+
+## 原版 AI 行动: 出手前光标换成效果范围形状、显示并滑到目标, 停一下再隐藏、放回行动者格
+func test_ai_aim_cursor_shows_area_cursor_on_target() -> void:
+	var bs := _scene(Vector2(720, 384))
+	var cur := _stub_cursor(bs)
+	var sp := UiLayout.sprite("map.cursor")
+	var area_first := int(sp.get("frame", 0)) + 2 * int(sp.get("area_stride", 0))
+	bs.show_cursor(3, 3)
+	bs.hide_cursor()   # AI 行动开头光标已隐藏 (状态 1)
+	cur.plays.clear()
+	await bs.aim_cursor(Vector2i(6, 4), 2, Vector2i(3, 3))
+	var aimed := cur.plays.filter(func(p): return p[1] == area_first)
+	check(aimed.size() >= 4, "从 (3,3) 滑到 (6,4) 每格一帧, 都是效果范围形状 (area 2)")
+	check(aimed.all(func(p): return p[0]), "滑向目标期间光标显示")
+	check(not cur.visible, "出手前光标隐藏")
+	eq(bs._cursor_cell, Vector2i(3, 3), "光标格放回行动者")
+	eq(bs._cursor_area, 0, "形状收回单格")
+	bs.reshow_cursor()
+	check(cur.visible and bs.cursor_cell() == Vector2i(3, 3), "行动完在行动者格重新显示")
+	cur.plays.clear()
+	bs.hide_cursor()
+	await bs.aim_cursor(Vector2i(3, 3), 1, Vector2i(3, 3))
+	check(cur.plays.is_empty() and not cur.visible, "目标就是光标所在格: 不指向 ")
+	bs.free()

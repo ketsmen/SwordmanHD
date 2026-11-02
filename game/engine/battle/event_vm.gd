@@ -377,7 +377,6 @@ func _talk(_t: int, d: PackedByteArray) -> void:
 		await bs.story_cursor_to(u.cx, u.cy, _s(d, 2) == 1)  # 第 2 个参数 = 1: 光标滑过去 (实测 1 格/帧), 否则立即到位
 	if text != "":
 		await bs.msgbox.show_text(_s(d, 4), _s(d, 6), _s(d, 8), text)
-	bs.hide_cursor()
 
 
 func _show_units(_t: int, d: PackedByteArray) -> void:
@@ -399,10 +398,10 @@ func _anim_play(_t: int, d: PackedByteArray) -> void:
 	await bs.play_animation(_s(d, 0), _s(d, 6), _s(d, 8))
 
 
-## 原版 (->) 设起始帧后立即继续, 不阻塞
+## 原版 (跳转 [0x1A] -> -> (槽位, 帧)) 只定格到第 arg 帧并发该帧声音, 不显示不推进, 立即继续
 func _anim_start(_t: int, d: PackedByteArray) -> void:
-	_log("开始动画 %d" % _s(d, 0))
-	bs.play_animation(_s(d, 0), -1, -1)
+	_log("动画音效 %d 帧 %d" % [_s(d, 0), _s(d, 2)])
+	bs.anim_cue(_s(d, 0), _s(d, 2))
 
 
 func _anim_hide(_t: int, d: PackedByteArray) -> void:

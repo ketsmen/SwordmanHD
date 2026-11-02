@@ -9,11 +9,11 @@
  ],
  "scale": 4,
  "stats": {
-  "elements": 261,
+  "elements": 263,
   "verified": 202,
   "screenshot": 10,
-  "unknown": 49,
-  "migrated": 245
+  "unknown": 51,
+  "migrated": 247
  },
  "fonts": {
   "body": {
@@ -5055,6 +5055,28 @@
     170,
     160,
     140
+   ],
+   "status": "unknown",
+   "code": "engine/ui/settings_panel.gd",
+   "migrated": true
+  },
+  "settings.lock_color": {
+   "type": "color",
+   "color": [
+    105,
+    100,
+    92
+   ],
+   "status": "unknown",
+   "code": "engine/ui/settings_panel.gd",
+   "migrated": true
+  },
+  "settings.lock_sel_color": {
+   "type": "color",
+   "color": [
+    150,
+    142,
+    126
    ],
    "status": "unknown",
    "code": "engine/ui/settings_panel.gd",

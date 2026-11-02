@@ -5,7 +5,8 @@ extends "res://tests/test_base.gd"
 const REQUIRES := ["content"]  # 缺则整个文件 SKIP (run_tests.gd 头注); 实测: 移走对应产物后这些测试失败
 const REQUIRES_TEST := {
 	"test_shop_poor_rows_dim_and_side_col": ["original"],
-	"test_shop_target_full_dims_and_no_prompt": ["original"]
+	"test_shop_target_full_dims_and_no_prompt": ["original"],
+	"test_buy_quantity": ["original"]
 }  # 个别方法的依赖 (同上)
 
 var _saved: Dictionary
@@ -108,5 +109,48 @@ func test_shop_target_full_dims_and_no_prompt():
 	near(rows[0].modulate.a, 1.0, 0.001, "目标栏有空位且钱够: 不压暗")
 	w.key("accept")
 	check(w._ask != null, "买得起: 弹问句")
+	w.free()
+	_teardown()
+
+
+## 买入数量 (复刻新增): 问句下一行选数量, 默认 1; ↑↓ ±1、Q/E ±10, 夹在 1 ~ min(买得起几件, 目标栏空格); 确认买 n 件
+func test_buy_quantity():
+	if not _assets_ready():
+		check(true)
+		return
+	_setup()
+	var price := int(CampInventory.item(0)["price"])
+	Game.state.gold = price * 3 + price / 2
+	var w := CampItemWindow.new(CampInventory.new([0, 1], 2))
+	_tree().root.add_child(w)
+	w.open()
+	w.key("accept")
+	check(w._ask != null, "弹买入问句")
+	eq(w._qty, 1, "默认 1 件")
+	eq(w._qty_max, 3, "上限 = 买得起 3 件 (主角栏空格更多)")
+	eq(String(w.desc._lines[1].text), UiStrings.t("camp.item.ask.qty", [1, 3]), "第二行「数量  < 1 >   最大 3」")
+	var tpl := UiStrings.t("camp.item.ask.qty")
+	var x0: float = w.desc._lines[1].position.x
+	var lt: float = x0 + UiText.measure(tpl.substr(0, tpl.find("<") + 1))
+	var gt: float = x0 + UiText.measure(String(w.desc._lines[1].text).substr(0, String(w.desc._lines[1].text).find(">")))
+	check(w._buy_ptr.split_x > lt and w._buy_ptr.split_x < gt, "点按分界在 < 与 > 之间 (数字处)")
+	for _i in 5:
+		w.key("up")
+	eq(w._qty, 3, "↑ 加到上限为止")
+	w.key("page_down")
+	eq(w._qty, 1, "Q/E 一次 10 件, 夹到 1")
+	w.key("up")
+	eq(w._qty, 2)
+	var ptr = w.ui_pointer_target()
+	check(ptr != null and ptr != w._ask, "指针交给买入组件 (是/否 + 数量行)")
+	eq(ptr.ui_hits().size(), w._ask.ui_hits().size() + 2, "多出数量行左右两区")
+	w.key("left")   # 默认✗, 换到○
+	w.key("accept")
+	check(w._ask == null, "问句关闭")
+	eq(Game.state.gold, price * 3 + price / 2 - price * 2, "扣两件的钱")
+	eq(w.inv.col(2)["items"].size(), 2, "主角栏多两件")
+	w.key("accept")
+	eq(w._qty_max, 1, "剩下的钱只够 1 件")
+	w.key("cancel")
 	w.free()
 	_teardown()

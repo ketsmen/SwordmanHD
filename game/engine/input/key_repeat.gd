@@ -8,6 +8,11 @@ extends RefCounted
 
 const HOLD := 0.2     # 按下后第一次连发的等待 (= 一个 5 tick 节拍)
 const REPEAT := 0.2   # 之后每格的间隔
+## 按住加速 (差异, 原版 实测 + 对照原版): 输入采样 给 4 个方向键各记按住帧数, 任一个按满 1 秒 (帧数 x 40 毫秒 >= 1000)
+## 就把 置 1, 输入分发器 从此不再每 200 毫秒才分发一次, 每帧 (40 毫秒) 分发一次, 松开清零回慢速。 当时用桩只替换了
+## 导入, 按住计数用的另一个按键状态导入 没覆盖到, 所以只测到慢速那一段
+const FAST_AFTER := 1.0       # 任一方向键按住满这么久就进加速
+const FAST_INTERVAL := 0.04   # 加速后的连发间隔: 每帧一次 (25 tick/秒)
 const MAX_PER_TICK := 2   # 一帧最多补发几次: 窗口被拖住/卡顿后一次 dt 很大时, 不能一口气连发几十下 (光标飞走、对白连翻)
 
 var _held: Array = []   # 按下顺序的方向动作 (UiAction.UP...)
@@ -61,6 +66,15 @@ func age(kind: int) -> float:
 ## 这个方向当前这次按下的序号 (没按住 0); 松开再按序号变
 func press_id(kind: int) -> int:
 	return int(_ids.get(kind, 0))
+
+
+## 是不是在「按住加速」里: 任一个按住的方向键已按满 FAST_AFTER 秒 (不分方向; 松开那个键就退出)。
+## 调用方 (InputRouter) 对用默认连发间隔的界面把间隔换成 FAST_INTERVAL; 自己要求更长间隔的界面 (换栏 / 换人要等动画) 不加速
+func fast() -> bool:
+	for k in _age:
+		if float(_age[k]) >= FAST_AFTER - 1e-6:
+			return true
+	return false
 
 
 ## 当前按住的方向 (最后按下的); 没有为 UiAction.NONE

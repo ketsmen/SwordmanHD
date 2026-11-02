@@ -109,6 +109,37 @@ func test_key_repeat_stall_does_not_burst():
 	eq(k.tick(0.2).size(), 1, "之后恢复每 0.2 秒一格")
 
 
+## 按住预览 (空格 / 查看) 的松开交还给收下按下的接收方: 按着时压上模态浮层 (F1 设定面板), 松开不能被浮层吞掉,
+## 否则营地行囊的装备属性预览一直不关 (玩家反馈 2026-11-02)
+func test_hold_release_goes_back_to_presser_under_overlay():
+	var r = _router()
+	var page := Rec.new()
+	r.push(page)
+	r._handle(_key(KEY_SPACE))
+	var panel := Rec.new()
+	r.push(panel, true)   # 设定面板
+	r._handle(_key(KEY_SPACE, false))
+	eq(page.log, ["select", "select_up"], "松开交还给按下时的界面")
+	eq(panel.log, [], "浮层收不到下层的松开")
+	r._handle(_key(KEY_F))
+	r._handle(_key(KEY_F, false))
+	eq(panel.log, ["info", "info_up"], "浮层里按下的, 松开仍给浮层")
+	r.pop(panel)
+	r._handle(_key(KEY_F, false))
+	eq(page.log, ["select", "select_up", "info_up"], "没有按住记录的松开照常给栈顶")
+
+
+## 长按出预览后第二根手指碰到屏幕: 补发松开, 不当双指取消
+func test_touch_long_press_then_second_finger_still_releases():
+	var g := TouchGestures.new()
+	g.touch_down(0, Vector2(50, 50), 0.0)
+	eq(g.tick(0.6)[0].kind, UiAction.INFO, "长按 = 查看")
+	g.touch_down(1, Vector2(400, 50), 0.8)
+	g.touch_up(0, Vector2(50, 50), 1.0)
+	var out: Array = g.touch_up(1, Vector2(400, 50), 1.1)
+	eq(out.map(func(a): return a.kind), [UiAction.INFO_UP], "只发查看松开")
+
+
 func test_touch_tap_long_press_drag_swipe_two_finger():
 	var g := TouchGestures.new()
 	g.touch_down(0, Vector2(100, 100), 0.0)
@@ -662,6 +693,72 @@ func test_key_repeat_uses_real_time_when_game_is_sped_up():
 	eq(n, 1, "3 倍速下真实 0.2 秒只发 1 次连发 (不是 3 次)")
 
 
+## 按住方向键满 1 秒后加速 (原版 实测): 输入采样 给 4 个方向键各记按住帧数, 任一个 x 40 毫秒 >= 1000 就把 置 1,
+## 输入分发器 不再每 200 毫秒才分发一次, 改成每帧 (40 毫秒) 一次; 松开清零回到慢速。任一方向键算, 不分方向
+func test_key_repeat_fast_after_holding_one_second():
+	var k := KeyRepeat.new()
+	check(not k.fast(), "没按住不加速")
+	k.press(UiAction.LEFT)
+	k.tick(0.99)
+	check(not k.fast(), "0.99 秒还没加速")
+	k.tick(0.01)
+	check(k.fast(), "满 1 秒加速")
+	k.press(UiAction.RIGHT)
+	check(k.fast(), "再按另一个方向仍加速 (原版任一方向键按满 1 秒就进加速)")
+	k.release(UiAction.LEFT)
+	check(not k.fast(), "松开那个按满的键就退出 (剩下的只按了一会儿)")
+	k.press(UiAction.LEFT)
+	check(not k.fast(), "重新按下重新计时")
+	k.clear()
+	check(not k.fast(), "clear 后不加速")
+
+
+## 路由器: 默认间隔的界面 (战场光标、营地主菜单等) 按住方向键, 前 1 秒每 0.2 秒一格, 满 1 秒后每 0.04 秒 (1 帧) 一格;
+## 界面自己要求更长间隔的 (换栏 / 换人要等动画做完) 不加速; 松开再按回到慢速
+func test_router_hold_direction_speeds_up_after_one_second():
+	var r = _router()
+	var rec := Rec.new()
+	r.push(rec)
+	r._handle(_key(KEY_LEFT))
+	var first := 0
+	for i in 100:   # 真实 1.0 秒 (10ms 一步)
+		r._process(0.01)
+	for e in rec.log:
+		if e == "left*":
+			first += 1
+	eq(rec.log[0], "left", "首次按下立即走一格")
+	check(first >= 4 and first <= 5, "前 1 秒每 0.2 秒一格 (4~5 次连发): %d" % first)
+	rec.log.clear()
+	for i in 100:   # 第 2 秒
+		r._process(0.01)
+	check(rec.log.size() >= 23 and rec.log.size() <= 26, "满 1 秒后每 0.04 秒一格 (25 次上下): %d" % rec.log.size())
+	r._handle(_key(KEY_LEFT, false))
+	r._handle(_key(KEY_LEFT))
+	rec.log.clear()
+	for i in 50:    # 松开再按: 回到慢速
+		r._process(0.01)
+	check(rec.log.size() <= 4, "松开再按回到每 0.2 秒一格: %d" % rec.log.size())
+	r.free()
+
+
+class SlowScreen:
+	extends Rec
+	func repeat_interval(_kind: int) -> float:
+		return 0.6   # 换栏 / 换人: 动画做完才再读键
+
+
+func test_router_slow_screen_keeps_its_interval_when_held_long():
+	var r = _router()
+	var rec := SlowScreen.new()
+	r.push(rec)
+	r._handle(_key(KEY_RIGHT))
+	for i in 300:   # 3 秒
+		r._process(0.01)
+	var n := rec.log.size() - 1   # 去掉首次按下
+	check(n >= 4 and n <= 5, "0.6 秒间隔的界面 3 秒只连发约 5 次, 不加速: %d" % n)
+	r.free()
+
+
 ## 方向键按住时长与按下序号 (城镇走路区分点按 / 按住用): tick 传真实 dt, 年龄就是真实按住时长
 func test_key_repeat_tracks_hold_age_and_press_id():
 	var kr := KeyRepeat.new()
@@ -734,4 +831,26 @@ func test_pointer_guard_window_is_real_time_when_game_is_sped_up():
 	Engine.time_scale = saved
 	check(early, "真实 0.2 秒仍在防误触窗口内")
 	check(not late, "真实 0.44 秒窗口结束")
+	r.free()
+
+
+## 安卓「返回」(系统返回键 / 手势 / 没被 Godot 处理的鼠标右键 → NOTIFICATION_WM_GO_BACK_REQUEST) = 取消; 右键刚取消过的不重复
+func test_android_back_request_cancels_once():
+	var r = _router()
+	var rec := Rec.new()
+	r.push(rec)
+	r._notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	eq(rec.log, ["cancel"], "返回 = 取消")
+	var b := InputEventMouseButton.new()
+	b.button_index = MOUSE_BUTTON_RIGHT
+	b.pressed = true
+	r._handle(b)
+	r._notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	eq(rec.log, ["cancel", "cancel"], "右键 + 随后转来的返回只算一次取消")
+	check(r.recent_inputs.any(func(t): return String(t).begins_with("mouse button 2")), "诊断页记下鼠标右键")
+	check(r.recent_inputs.any(func(t): return String(t).begins_with("back request")), "诊断页记下返回")
+	r.replay_lock = true
+	r._right_cancel_ms = -100000
+	r._notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	eq(rec.log.size(), 2, "回放中不放行")
 	r.free()

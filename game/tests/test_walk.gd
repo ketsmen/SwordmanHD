@@ -349,3 +349,40 @@ func test_smooth_walk_slides_evenly():
 	check(absf(seen[0] - 6.25) < 0.01 and absf(seen[1] - 12.5) < 0.01 and absf(seen[2] - 18.75) < 0.01, "匀速: %s" % str(seen))
 	u.free()
 	_unfake("Sprite/test_smooth/a")
+
+
+## 战场单位每个动作的帧声音都要响 (推进帧时, 只要帧声音有效就 PlaySfx, 与动作无关; 原版 内存对照原版确认):
+## 起步 / 收步 (钢破鬼 227 / 刀凛鬼 204 / 殷剑平 等: 起步第 4、7 帧出刀声, 收步收刀声)、站立 (赤炼鬼 169 等)、胜利 (主角升级姿势) 与行走脚步一样。
+## 回归: 原先只有行走 (MOVE) 开声, 提 / 放剑匣、出刀 / 收刀的动作全是哑的 (玩家反馈钢破鬼走路出刀没声音)
+func test_every_act_plays_its_frame_sound():
+	if not _fake_ok():
+		check(true, "无资源, 跳过")
+		return
+	var key := "Sprite/test_snd/a"
+	_fake_anim(key)
+	var A = (Engine.get_main_loop() as SceneTree).root.get_node("Assets")
+	for f in A._anims[key.to_lower()]["frames"]:
+		f["sound"] = 0
+	var u := _unit_with(key, Vector2i(6, 7))
+	u.walk([Vector2i(7, 7)], 150.0)
+	eq(u.act, BattleUnit.Act.MOVE_START, "一开始播起步")
+	check(u.anim.sfx_count >= 1, "起步帧的声音 (出刀) 响了")
+	var guard := 0
+	var prev := u.anim.sfx_count
+	while u.act != BattleUnit.Act.MOVE_END and guard < 2000:
+		prev = u.anim.sfx_count
+		_tick(u, 0.01)
+		guard += 1
+	eq(u.act, BattleUnit.Act.MOVE_END, "到格后播收步")
+	check(u.anim.sfx_count > prev, "收步帧的声音 (收刀) 响了")
+	while u.act != BattleUnit.Act.STAND and guard < 4000:
+		prev = u.anim.sfx_count
+		_tick(u, 0.01)
+		guard += 1
+	eq(u.act, BattleUnit.Act.STAND, "走完回站立")
+	check(u.anim.sfx_count > prev, "站立帧的声音 (赤炼鬼的喘息等) 响了")
+	prev = u.anim.sfx_count
+	u.play_act(BattleUnit.Act.WIN, u.dir)
+	check(u.anim.sfx_count > prev, "胜利帧的声音响了")
+	u.free()
+	_unfake(key)

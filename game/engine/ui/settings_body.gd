@@ -48,6 +48,9 @@ func _draw() -> void:
 			if r2["kind"] == "volume":
 				can_l = int(gc.settings[r2["key"]]) > 0
 				can_r = int(gc.settings[r2["key"]]) < 10
+			if SettingsSchema.is_locked(r2):   # 锁定行 (战斗中的成长): 两侧三角都变暗, 看得出改不了
+				can_l = false
+				can_r = false
 			draw_colored_polygon(PackedVector2Array([Vector2(lx + ar.x, y), Vector2(lx + ar.x, y + ar.y), Vector2(lx, y + ar.y / 2)]),
 				ac if can_l else Color(ac, 0.25))
 			draw_colored_polygon(PackedVector2Array([Vector2(rx, y), Vector2(rx, y + ar.y), Vector2(rx + ar.x, y + ar.y / 2)]),

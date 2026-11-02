@@ -4,7 +4,7 @@ extends Node
 ## 通关录像: 记录玩家从启动 (标题画面) 到通关的全部操作, 之后可原样回放。
 ##
 ## 原理: 所有键盘/鼠标/触摸/手柄输入都先翻译成 UiAction 再交给界面栈 (InputRouter.dispatch, 会发 dispatched 信号),
-## 这里订阅该信号, 把每个动作连同「录像时钟」(游戏时间, 秒) 存进 JSON; 战斗随机数种子平时取当前时间 (BattleRules.battle_seed),
+## 这里订阅该信号, 把每个动作连同「录像时钟」(游戏时间, 秒) 存进 JSON; 战斗随机数种子平时取当前时间 (BattleRules.battle_start, 同时记成长模式),
 ## 录像里按顺序记下每次实际用的种子, 回放时原样取回, 所以命中/闪避/暴击与当时完全一致。
 ## 回放: 按录像时钟把同样的动作送回 InputRouter.dispatch; 界面忙 (动画/过场) 时当时收不到的动作回放时也一样收不到, 与原样对应。
 ##   速度 N 倍: Engine.time_scale = N (录像时钟用缩放后的 delta, 相对时序不变); 回放中可用 set_speed 随时调 (档位 SPEED_STEPS)。
@@ -395,25 +395,37 @@ func _exit_tree() -> void:
 		current = null
 
 
-## 战斗随机数种子: 录制时记下, 回放时取回当时那场用的 (BattleRules.battle_seed 调用)
-static func seed_for_battle(fresh: int) -> int:
+## 成长设定值 (SettingsSchema 的 growth) 的顺序号: 编进录像里种子的高位 (种子 | 序号 << 32), 旧录像高位为 0 = random。
+## 种子列表在读档剪辑 / 分段导出 / 标记截断里都按「整条」处理, 编进种子就自动跟着走, 不用另维护一份并行列表
+const GROWTH_MODES := ["random", "max", "min"]
+const SEED_MASK := 0xFFFFFFFF
+
+
+## 一场战斗的开局参数 {seed, growth}: 录制时记下种子和这场用的成长模式, 回放时取回当时那场的 (BattleRules.battle_start 调用);
+## 没在录 / 放原样返回。读战阵存录重建的战斗 (种子记在 load 事件上) 回放时不重建战斗, 沿用原来的, 成长模式也沿用
+static func battle_start(fresh: int, growth := "random") -> Dictionary:
 	var p := current
 	if p == null:
-		return fresh
+		return {"seed": fresh, "growth": growth}
 	if p.mode == "record":
 		if p._pending_reseed and not p._events.is_empty() and p._events[-1].has("load"):
 			p._events[-1]["seed"] = fresh   # 读战阵存录重建的战斗: 种子记在 load 事件上
 			p._pending_reseed = false
-			return fresh
-		p._seeds.append(fresh)
-		return fresh
+			return {"seed": fresh, "growth": growth}
+		p._seeds.append(fresh | (maxi(0, GROWTH_MODES.find(growth)) << 32))
+		return {"seed": fresh, "growth": growth}
 	if p.mode == "replay":
 		if p._seed_i < p._seeds.size():
 			var s := int(p._seeds[p._seed_i])
 			p._seed_i += 1
-			return s
+			return {"seed": s & SEED_MASK, "growth": GROWTH_MODES[clampi(s >> 32, 0, GROWTH_MODES.size() - 1)]}
 		push_warning("通关录像: 回放里没有更多战斗种子了 (用新的)")
-	return fresh
+	return {"seed": fresh, "growth": growth}
+
+
+## 只要种子 (不关心成长模式的调用方)
+static func seed_for_battle(fresh: int) -> int:
+	return int(battle_start(fresh)["seed"])
 
 
 ## 检查点 (战斗每回合开头等): 录制时记下, 回放时比对, 对不上警告一次
@@ -490,7 +502,7 @@ static func _read_history(save_path: String, id: String) -> Dictionary:
 	return j
 
 
-## 读档: 存档是本次录像中存下的 -> 把存档之后被放弃的操作/种子/检查点剪掉, 并插一个「换种子」事件 (读档重建战斗会重新抽种子, 见 battle_seed);
+## 读档: 存档是本次录像中存下的 -> 把存档之后被放弃的操作/种子/检查点剪掉, 并插一个「换种子」事件 (读档重建战斗会重新抽种子, 见 battle_start);
 ## 存档不是本次录像存的 (录像开始之前的老档) -> 清空录像, 以这个存档的内容作为录像起点 (data = 存档读入后的内容)
 static func note_load(kind: String, key: int, data: Dictionary, save_path := "") -> void:
 	var p := current
